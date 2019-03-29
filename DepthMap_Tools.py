@@ -5,48 +5,27 @@ Created on Sat Mar  9 12:00:57 2019
 
 @author: zhantao
 """
+import cv2
+import warnings
 import numpy as np
+
 from typing import Optional
-import matplotlib.pyplot as plt
 from interpolation.splines import CubicSplines
 
 import cam360
 
 class Depth_tool:
     
-    def __init__(self, expand_ratio: float = 1.5):
+    def __init__(self, expand_ratio: float = 1.36):
         
         self._cubemap = []
         
         self._expand_ratio = expand_ratio
     
-    
-    def get_partial_img (self, cam: 'cam360', theta: np.array, phi: np.array) -> np.array:
-        """
-            This is a wrapper of cam360's 'get_texture_at()'. It computes the texture at the specified (theta, phi) coordinate range.
-    
-            Args:
-                theta: the target elevation coordinate (M,).
-                phi: the target azimuth coordinate (N,).
-    
-            Returns:
-                texture: texture (N, M, self._channels) at the input coordinate.
-                
-            Example:
-                theta = array[1,2,3]
-                phi   = array[4,5,6]
-                
-                return: image data at [1,4], [1,5], [1,6], ... , [3,5], [3,6] and being reshaped back as an image
-        """
-        
-        phi_grid, theta_grid = np.meshgrid(phi, theta)
-        phi_grid, theta_grid = phi_grid.flatten(), theta_grid.flatten()
-        
-        partial_img = cam.get_texture_at(theta_grid, phi_grid)
-        partial_img = partial_img.T.reshape( phi.shape[0], theta.shape[0], 3)
-        
-        return partial_img
-    
+    def save_cubemap(self):
+        for ind, view in  enumerate(self._cubemap):
+            file_name = 'view' + str(ind)+'.png'
+            cv2.imwrite(file_name, 255*np.flip(view,axis = 2))
     
     def cube2sphere( self, cube_list: list = None, resolution: np.array = np.array([512, 1024]), position: Optional[np.array] = None) -> np.array:
         """
@@ -195,7 +174,7 @@ class Depth_tool:
         return points, mask_face
         
     
-    def sphere2cube( self, cam: 'cam360', resolution: int = 512) -> list:
+    def sphere2cube( self, cam: 'cam360', resolution: int = 256) -> list:
         """
             It computes the six cubic maps of the given cam360 object. The default resolution is 512x512.
                 
@@ -222,7 +201,10 @@ class Depth_tool:
             print("Unvalid input cam360 Object!")
             return None
         
-        # if the cubmap is not 
+        if resolution > cam._height or resolution > cam._width:
+            warnings.warn('The required resolution is higher than the given omnidirectional image! Not recommended!')
+        
+        # if the cubmap is not empty, reset the cubemap list
         if len(self._cubemap) != 0:
             self._cubemap = []
         
