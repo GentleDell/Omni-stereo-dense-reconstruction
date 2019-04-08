@@ -8,6 +8,7 @@ Created on Sat Mar  9 12:00:57 2019
 import cv2
 import warnings
 import numpy as np
+from spherelib import pol2eu, eu2pol
 
 from typing import Optional
 from interpolation.splines import CubicSplines
@@ -19,8 +20,6 @@ class Depth_tool:
     def __init__(self, expand_ratio: float = 1.36):
         
         self._cubemap = []
-        
-        self._expand_ratio = expand_ratio
     
     def save_cubemap(self):
         for ind, view in  enumerate(self._cubemap):
@@ -172,124 +171,189 @@ class Depth_tool:
         points  = np.column_stack((v, u))
         
         return points, mask_face
-        
     
-    def sphere2cube( self, cam: 'cam360', resolution: int = 256) -> list:
+    
+    
+    def sphere2cube (self, cam:'cam360', resolution: tuple=(256,256)):
         """
-            It computes the six cubic maps of the given cam360 object. The default resolution is 512x512.
-                
+            Description: 
+            ----------
+            It generates cubic maps from the given omnidirectional image.    
+            
             Parameters
             ----------    
-            cam : cam360 object
-                containing a valid omnidirectional image.
-            resolution : int
-                the required resolution of cubic maps, default is 512x512.
-    
-            Returns
-            -------
-            cubemap : a list of the six cubic maps of the given cam360 object.
-                      [ 0th:  back  |  1st:  left  |  2nd:  front  |  3rd:  right  |  4th:  top  |  5th:  bottom ]
+            cam: object
+                camera320 object to be projected
+            
+            resolution: tuple
+                resolution of the cubic maps
                 
             Examples
             --------
-            >>> from DepthMap_Tools import Depth_tool
-            >>> tool_obj = Depth_tool()
-            >>> cubemaps = tool_obj.sphere2cube(Omni_obj, resolution=1024)
         """
-        
-        if cam._texture is None:
-            print("Unvalid input cam360 Object!")
-            return None
-        
-        if resolution > cam._height or resolution > cam._width:
-            warnings.warn('The required resolution is higher than the given omnidirectional image! Not recommended!')
-        
-        # if the cubmap is not empty, reset the cubemap list
+    # input verification
+        if cam.texture is None:
+            raise ValueError('INPUT ERROR! Empty cam360 object.')  
+        if resolution[0] <= 0 or resolution[1] <= 0:
+            raise ValueError('INPUT ERROR! Resolutions must be positive.')  
         if len(self._cubemap) != 0:
             self._cubemap = []
-        
-        # the cartesian coordinate, format: [6 maps, resolution , resolution , channels]
-        xyz_space = np.zeros((6, resolution, resolution, 3))        
-        
-        # generate an all-one vector and the 2D mesh grid
-        Ones = np.ones((resolution,resolution,1))
-        
-        cube_coor = np.linspace(-cam._radius * self._expand_ratio, cam._radius * self._expand_ratio, num = resolution)
-        cube_grid_x, cube_grid_y = np.meshgrid(cube_coor,cube_coor)
-        cube_grid_x, cube_grid_y = np.expand_dims(cube_grid_x,axis = -1), np.expand_dims(cube_grid_y,axis = -1)
-        
-        # generate the cubic grid, each point of the grid corresponds to a pixel of the six cubic maps
-        # format: 0th-faces, 1st-width(resolution), 2nd-height(resolution), 3rd-[x,y,z]
-        xyz_space[0,:,:,:] = np.dstack( (-cube_grid_x ,  -Ones      , -cube_grid_y))
-        xyz_space[1,:,:,:] = np.dstack( (   -Ones     , cube_grid_x , -cube_grid_y))
-        xyz_space[2,:,:,:] = np.dstack( ( cube_grid_x ,   Ones      , -cube_grid_y))
-        xyz_space[3,:,:,:] = np.dstack( (    Ones     ,-cube_grid_x , -cube_grid_y))
-        xyz_space[4,:,:,:] = np.dstack( ( cube_grid_x , cube_grid_y ,     Ones    ))
-        xyz_space[5,:,:,:] = np.dstack( ( cube_grid_x ,-cube_grid_y ,    -Ones    ))
-        
-        # convert cartesian coordinate to spherical coordinate
-        sph_space = self.cartesian2spherical(xyz_space)
-        
-        # get the texture of each cubic map        
-        for angles in sph_space:
-            
-            # flatten theta and phi to use the get_texture_at() method
-            theta = angles[:,:,0].flatten()
-            phi   = angles[:,:,1].flatten()
-            
-            # get the texture and save it to the output cubemap list
-            texture_vec = cam.get_texture_at(theta, phi)
-            self._cubemap.append(texture_vec.T.reshape( resolution, resolution, 3))
-            
-        return self._cubemap
+    # generate cubic maps
+        self._cubemap.append(self.cube_projection(cam, (0, np.pi/2), resolution))
+        self._cubemap.append(self.cube_projection(cam, (np.pi/2, np.pi/2), resolution))
+        self._cubemap.append(self.cube_projection(cam, (np.pi, np.pi/2), resolution))
+        self._cubemap.append(self.cube_projection(cam, (3*np.pi/2, np.pi/2), resolution))
+        self._cubemap.append(self.cube_projection(cam, (np.pi, 0), resolution))
+        self._cubemap.append(self.cube_projection(cam, (np.pi, np.pi), resolution))
         
     
-    def cartesian2spherical( self, xyz_coordinates: np.array ) -> np.array:
+    def cube_projection( self, cam:'cam360', direction: tuple,
+                         resolution: tuple=(256,256), dist: float = 1 ) -> np.array:
         """
-            It computes the spherical coordinates of the given points, using the their cartesian coordinates.
-                
+            Description: 
+            ----------
+            It projects a omnidirectional image to its tangent plane(or the plane parallel to its tangent plane) on the given direction.    
+            
             Parameters
             ----------    
-            xyz_coordinates : numpy.array
-                The cartesian coordinate of each point. 
-                It contains 4 dimensions:  0th-faces, 1st-width(resolution), 2nd-height(resolution), 3rd-[x,y,z]
-    
+            cam: object
+                camera320 object to be projected
+                 
+            direction: tuple (phi, theta, fov_phi, fov_theta)
+                phi, theta -> the direction of normal line to the tangent plan.
+                fov_phi, fov_theta -> field of view on phi and theta
+                
+            resolution: tuple
+                resolution of the output image
+                
+            dist: float
+                distance between the tangent plane and the center of the sphere 
+                
             Returns
             -------
-            sphere_coord : `list` of numpy.array 
-                The number of entries equals to xyz_coordinates.shape[0], i.e. the number of faces). Each entry of sphere_coord is a numpy.array.
-                Each array contains 3 dimensions:  0th-width(resolution), 1st-height(resolution), 2nd-[theta, phi]
+            projection: np.array
+                the projected cubic map of the given omnidirectional image on the given plane
                 
             Examples
             --------
-            >>> from DepthMap_Tools import Depth_tool
-            >>> cat_space = np.ones((2, 10, 10, 3))
-            >>> tool_obj  = Depth_tool()
-            >>> sph_space = tool_obj.cartesian2spherical(cat_space)
+            >>> cube_projection(Omni_obj, direction=(np.pi, np.pi/2, np.pi/2, np.pi/2), resolution=(320,320))
         """
-        # the output list, containing spherical coordinates corresponding to the given cartesian coordinates
-        sphere_coord = []; 
+    # input verification
+        if len(direction)!=2 and len(direction)!=4:
+            raise ValueError('INPUT ERROR! the input direction must contain 2 angles as (phi, theta) or contain 4 angles as (phi, theta, fov_phi, fov_theta)')   
+        elif len(direction)==2:
+            center_phi   = direction[0]
+            center_theta = direction[1]
+            fov_phi   = np.pi/2
+            fov_theta = np.pi/2
+        else:
+            center_phi   = direction[0]
+            center_theta = direction[1]
+            fov_phi   = direction[2]
+            fov_theta = direction[3]
+            
+        if dist < 1:
+            raise ValueError('INPUT ERROR! The distance between the tangent plane and the center of the sphere should be greater than 1')   
+        if center_phi < 0 or center_phi >= 2*np.pi :
+            raise ValueError('INPUT ERROR! Phi of the normal line should belong to [0, 2*pi)')   
+        if center_theta < 0 or center_theta > np.pi:
+            raise ValueError('INPUT ERROR! theta of the normal line should belong to [0, pi]')   
+        if fov_phi < 0 or fov_phi >= np.pi:
+            raise ValueError('INPUT ERROR! fov_phi should belong to [0, pi)')   
+        if fov_theta < 0 or fov_theta >= np.pi:
+            raise ValueError('INPUT ERROR! fov_theta should belong to [0, pi)') 
+        if resolution[0] <= 0 or resolution[1] <= 0:
+            raise ValueError('INPUT ERROR! Resolutions must be positive.')  
+    
+    # generate pixel grids    
+        # comput the relative image size
+        half_height= dist*np.tan(fov_theta/2)        
+        half_width = dist*np.tan(fov_phi/2)
+        # compute pixels' positions on the image
+        width_grids = np.linspace(-half_width , half_width , num=resolution[0], endpoint=True)
+        height_grids= np.linspace(-half_height, half_height, num=resolution[1], endpoint=True)
+        # generate pixels grids
+        width_grids, height_grids = np.meshgrid(width_grids,height_grids)
         
-        for face in range(xyz_coordinates.shape[0]):
-            # theta
-            theta = np.arctan2( np.sqrt(xyz_coordinates[face,:,:,0]**2 + xyz_coordinates[face,:,:,1]**2), xyz_coordinates[face,:,:,2] )
+    # compute the corresponding spherical coordinate for every pixel
+        phi_range, theta_range = self.cartesian2spherical(center_phi, center_theta, width_grids, height_grids, dist)
+    
+    # obtain the texture     
+        # flatten theta and phi to use the get_texture_at() method
+        phi   = phi_range.flatten()
+        theta = theta_range.flatten()        
+        # get the texture and save it to the output cubemap list
+        texture_vec = cam.get_texture_at(theta, phi)
+        projection  = texture_vec.T.reshape( resolution[1], resolution[0], 3)
             
-            # phi
-            phi   = np.arctan2( xyz_coordinates[face,:,:,1], xyz_coordinates[face,:,:,0])
-            
-            # align two coordinate system (ours: neg-Y [0, 2*pi] , numpy: pos-X [-pi, pi] )
-            mask_neg = phi < 0
-            mask_pos = phi > 0
-            phi[mask_neg]  = -(phi[mask_neg] + np.pi/2)
-            phi[mask_pos]  = - phi[mask_pos] + np.pi*3/2 
-            
-            # avoid being out of the domain of phi [0, 2*pi]
-            mask_neg = phi < 0
-            phi[mask_neg]  = phi[mask_neg] + 2*np.pi
+        return projection
 
-            # stack theta and phi
-            theta_phi = np.dstack( (np.expand_dims(theta, axis=-1), np.expand_dims(phi, axis=-1)) )
+
+    def cartesian2spherical( self, phi:float, theta:float, 
+                             width_grids: np.array, height_grids: np.array, dist: float) -> tuple:
+        """
+            Description:
+            ----------
+            It computes the spherical coordinates of the given pixel grids.
+                
+            Parameters
+            ----------    
+            phi: float
+                the horizontal angle (from negative y axis) of the normal line
+                
+            theta: float
+                the vertical angle (from positive z axis) of the normal line
+                
+            width_grids: np.array
+                positions of points on the image plane. 
+                
+            height_grids: np.array
+                positions of points on the image plane. 
+                
+            dist: float
+                distance between the tangent plane and the center of the sphere 
+                
+                         width
+              z ^        ------                 
+                |   y    \--\--\ heigh
+                |   /     \--\--\
+                |  /       \--\--\
+                | /
+                |/
+                --------------> x
             
-            sphere_coord.append(theta_phi)
+            Returns
+            -------
+            phi_grids: np.array
+                phi positions of points under the polar coordinate system
+                
+            theta_grids: np.array
+                theta positions of points under the polar coordinate system
+                
+            Examples
+            --------
+            >>> cartesian2spherical(center_phi, center_theta, width_grids, height_grids, dist)
+        """  
+        # get the euler coordinate of the tangent point
+        center_x, center_y, center_z = pol2eu(theta, phi, dist)
+        # compute the length of the projected normal line segment
+        prj_dist = dist*np.sin(theta)
+        # compute z-axis positions of each point
+        zeta_range = -height_grids*np.sin(theta) + center_z
         
-        return sphere_coord
+        # compute the cooresponding polar coordinate for each image point
+        theta_grids = np.arccos(zeta_range/np.sqrt(dist**2 + height_grids**2 + width_grids**2))
+        phi_grids   = np.arctan2(width_grids,  prj_dist+height_grids*np.cos(theta)) + phi
+        
+        # make sure every angle is valid phi: (0,2pi), theta:(0,pi)
+        phi_grids[phi_grids<0] = phi_grids[phi_grids<0] + 2*np.pi
+        phi_grids[phi_grids>=2*np.pi] = phi_grids[phi_grids>=2*np.pi] - 2*np.pi
+        
+        theta_grids[theta_grids<0] = np.abs(theta_grids[theta_grids<0])
+        theta_grids[theta_grids>np.pi] = 2*np.pi - theta_grids[theta_grids>np.pi]
+        
+        return phi_grids, theta_grids
+        
+        
+        
+        

@@ -6,8 +6,8 @@ plt.ioff() # Turn interactive plotting off
 from cam360 import Cam360
 from DepthMap_Tools import Depth_tool
 
-#Omni_img = cv2.imread('../../dataset/omnidirectional/EPFL_MMSPG_Omni/SDR version/Indoor/IMG009/Indoor_IMG009_mantiuk08.jpg')
-Omni_img = cv2.imread('../../dataset/omnidirectional/1024_512/test_-4_0_1_1024_5120000.png')
+#Omni_img = cv2.imread('../../../dataset/omnidirectional/1024_512/test_0_0_1_1024_5120000.png')
+Omni_img = cv2.imread('../../../dataset/omnidirectional/512_256/test_0_0_1_512_256_0111.png')
 
 # as opencv use BGR channel of images, here the channel order has been flipped
 Omni_img = np.flip(Omni_img, axis=2)
@@ -24,7 +24,4 @@ translation_vec  = np.zeros([3,1])
 tool_obj = Depth_tool(expand_ratio=1.36)
 Omni_obj = Cam360(rotation_mtx, translation_vec, height, width, channels, Omni_img)
 
-tool_obj.sphere2cube(Omni_obj, resolution=512)
-tool_obj.save_cubemap()
-Omni_new = tool_obj.cube2sphere( resolution=np.array([256,512])) 
-
+tool_obj.sphere2cube(Omni_obj, resolution=(256,256))
