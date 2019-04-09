@@ -8,6 +8,7 @@ Created on Sat Mar  9 12:00:57 2019
 import cv2
 import warnings
 import numpy as np
+from read_dense import read_array
 from spherelib import pol2eu, eu2pol
 
 from typing import Optional
@@ -17,16 +18,72 @@ import cam360
 
 class Depth_tool:
     
-    def __init__(self, expand_ratio: float = 1.36):
-        
+    def __init__(self, dist: float = 1, expand_fov: float=1, expand_shape: Optional[float]=1):
+        """
+            It initializes the object.
+                
+            Parameters
+            ----------    
+            dist: float
+                distance between the tangent plane and the center of the sphere 
+            
+            expand_fov : float
+                The factor to expand the field of view.
+                In order to keep all information during cubic mapping (sphere2cube()),
+                this parameters should be set to larger than 1.
+                
+            expand_shape : float
+                The factor to recover onmi image from cube maps. 
+                If sphere2cube() is used for cube mapping, this variable will be set automatically. 
+                
+        """
+        self._dist = dist
         self._cubemap = []
+        self._depthmap = []
+        self._omnimage = None
+        self._expand_fov = expand_fov
+        self._expand_shape = expand_shape   
+        
+    @property
+    def omnimage(self) -> np.array:
+        return self._omnimage
     
-    def save_cubemap(self):
-        for ind, view in  enumerate(self._cubemap):
-            file_name = 'view' + str(ind)+'.png'
-            cv2.imwrite(file_name, 255*np.flip(view,axis = 2))
+    @property
+    def cubemap(self) -> list:
+        return self._cubemap
     
-    def cube2sphere( self, cube_list: list = None, resolution: np.array = np.array([512, 1024]), position: Optional[np.array] = None) -> np.array:
+    @property
+    def depthmap(self) -> list:
+        return self._depthmap
+    
+    def save_cubemap(self, prefix: str = ''):
+        if len(self._cubemap) == 0:
+            warnings.warn("No valid cube map!")
+        else:
+            for ind, view in enumerate(self._cubemap):
+                file_name = prefix + 'view' + str(ind)+'.png'
+                cv2.imwrite(file_name, 255*np.flip(view,axis = 2))
+    
+    def save_cubedepth(self, prefix: str = ''):
+        if len(self._depthmap) == 0:
+            warnings.warn("No valid cube map!")
+        else:
+            for ind, view in enumerate(self._depthmap):
+                file_name = prefix + 'view' + str(ind)+'.png'
+                cv2.imwrite(file_name, 255*(view - np.min(view))/(np.max(view)-np.min(view)))
+            
+    def save_omnimage(self):
+        if self._omnimage is None:
+            warnings.warn("No valid omnidirectional image!")
+        if self._omnimage.shape[2] == 3: 
+            cv2.imwrite("omni_image.png", 255*np.flip(self._omnimage,axis = 2))
+        else: 
+            cv2.imwrite("omni_depthmap.png", 255*self._omnimage)
+    
+    
+    def cube2sphere( self, cube_list: list = None, normalize: bool = False,
+                    resolution: tuple = (256, 512), 
+                    order: Optional[tuple] = None):
         """
             It projects a list of six cubic images to an omnidirectional image. The default resolution of the omnidirectional image is 512x1024.
                 
@@ -35,8 +92,10 @@ class Depth_tool:
             cube_list : a list of 6 cubic images
                 If 'position' is not given, then the order of the 6 images has to be:
                 [ 0th:  back  |  1st:  left  |  2nd:  front  |  3rd:  right  |  4th:  top  |  5th:  bottom ]
-            resolution : np.array
+                
+            resolution : tuple
                 The required resolution for the ouput omnidirectional image, default is 512x1024.
+                
             position :
                 TBD, support cubicmaps in different orders.
     
@@ -52,12 +111,20 @@ class Depth_tool:
             >>> tool_obj.sphere2cube(Omni_obj)
             >>> Omni_new = tool_obj.cube2sphere( tool_obj._cubemap ) 
         """
-        # check the cube list, if it is empty, try to use the cubic images contained in the object
+        # check the cube list, if it is empty, try to use the depth maps or cubic images of the object
         if cube_list is None:
-            if self._cubemap is not None:
-                cube_list = self._cubemap
+            if len(self._depthmap) == 6:
+                cube_list = self._depthmap.copy()
+            elif len(self._cubemap) == 6:
+                cube_list = self._cubemap.copy()
             else:
-                raise ValueError('Bad input! Unvalid input image list.')            
+                raise ValueError('Bad input! Invalid input image list.')       
+        if normalize:
+            for ct in range(len(cube_list)):
+                cube_list[ct] = (cube_list[ct] - np.min(cube_list[ct]))/(np.max(cube_list[ct]) - np.min(cube_list[ct]))
+                
+        if self._expand_fov == 1 or self._expand_shape == 1:
+            warnings.warn("The omnidirectional image could have some streaks as '_expand_fov' is using the default value.") 
         
         # check the consistency of images' size
         if cube_list[0].shape != cube_list[1].shape or cube_list[1].shape != cube_list[2].shape or  \
@@ -72,16 +139,16 @@ class Depth_tool:
         channel= cube_list[0].shape[2] 
         
         # parameters for cubicsplines
-        up  = [2*self._expand_ratio, 2*self._expand_ratio]
-        low = [-self._expand_ratio*2/width, -self._expand_ratio*2/width]
+        up  = [2*self._expand_shape, 2*self._expand_shape]
+        low = [-self._expand_shape*2/width, -self._expand_shape*2/width]
         orders = [height, width]
         
         # create the Omnidirectional image
-        Omni_image = np.zeros([resolution[0]*resolution[1], 3])
+        Omni_image = np.zeros([resolution[0]*resolution[1], channel])
         
         # if the order of images is given 
-        if position:
-            print('new order')
+        if order is not None:
+            print('Setting different order is not supported now.')
             # TODO:
                 # support different orders
         
@@ -95,9 +162,9 @@ class Depth_tool:
                 points, mask_face  = self.spherical2img(face, resolution)
                 Omni_image[ mask_face, :]  = spline.interpolate(points, diff=False)
                 
-            Omni_image = Omni_image.reshape([resolution[0], resolution[1], 3])
+            self._omnimage = None
+            self._omnimage = Omni_image.reshape([resolution[0], resolution[1], -1])
             
-        return Omni_image
     
     
     def spherical2img(self, face_num: int, resolution: np.array) -> np.array:
@@ -108,7 +175,7 @@ class Depth_tool:
             ----------    
             face_num : int
                 The face number. [ 0:  back  |  1:  left  |  2:  front  |  3:  right  |  4:  top  |  5:  bottom ]
-            resolution : np.array
+            resolution : tuple
                 The required resolution for theta and phi.
                 
             Returns
@@ -139,8 +206,8 @@ class Depth_tool:
             theta = grid_theta.flatten()[mask_face]
             
             # normalized image coordinates
-            u = self._expand_ratio - np.tan(phi)
-            v = self._expand_ratio - np.sqrt(1 + np.power(np.tan(phi), 2))/np.tan(theta)
+            u = self._expand_shape - np.tan(phi)
+            v = self._expand_shape - np.sqrt(1 + np.power(np.tan(phi), 2))/np.tan(theta)
         
         # the top surface 
         elif face_num == 4:
@@ -151,8 +218,8 @@ class Depth_tool:
             theta = grid_theta.flatten()[mask_face]
             
             # normalized image coordinates
-            u = self._expand_ratio - np.tan(theta)*np.sin(phi)
-            v = self._expand_ratio - np.tan(theta)*np.cos(phi)
+            u = self._expand_shape - np.tan(theta)*np.sin(phi)
+            v = self._expand_shape - np.tan(theta)*np.cos(phi)
         
         # the bottom surface       
         elif face_num == 5:
@@ -163,8 +230,8 @@ class Depth_tool:
             theta = grid_theta.flatten()[mask_face]
             
             # normalized image coordinates
-            u = self._expand_ratio + np.tan(theta)*np.sin(phi)
-            v = self._expand_ratio - np.tan(theta)*np.cos(phi)
+            u = self._expand_shape + np.tan(theta)*np.sin(phi)
+            v = self._expand_shape - np.tan(theta)*np.cos(phi)
         else:
             raise ValueError('Bad input! The give surface number is not supported.')
             
@@ -174,7 +241,7 @@ class Depth_tool:
     
     
     
-    def sphere2cube (self, cam:'cam360', resolution: tuple=(256,256)):
+    def sphere2cube (self, cam:'cam360', resolution: tuple=(256,256), dist: float=None):
         """
             Description: 
             ----------
@@ -188,8 +255,12 @@ class Depth_tool:
             resolution: tuple
                 resolution of the cubic maps
                 
+            dist: float
+                distance between the tangent plane and the center of the sphere 
+                
             Examples
             --------
+            >>>> sphere2cube(Omni_obj, rsesolution=(256,256))
         """
     # input verification
         if cam.texture is None:
@@ -198,17 +269,32 @@ class Depth_tool:
             raise ValueError('INPUT ERROR! Resolutions must be positive.')  
         if len(self._cubemap) != 0:
             self._cubemap = []
+        # if dist is not given, use the default value    
+        if dist is None:
+            dist = self._dist
     # generate cubic maps
-        self._cubemap.append(self.cube_projection(cam, (0, np.pi/2), resolution))
-        self._cubemap.append(self.cube_projection(cam, (np.pi/2, np.pi/2), resolution))
-        self._cubemap.append(self.cube_projection(cam, (np.pi, np.pi/2), resolution))
-        self._cubemap.append(self.cube_projection(cam, (3*np.pi/2, np.pi/2), resolution))
-        self._cubemap.append(self.cube_projection(cam, (np.pi, 0), resolution))
-        self._cubemap.append(self.cube_projection(cam, (np.pi, np.pi), resolution))
+        # enlarge field of view to include more information for further cube->sphere reconstruction4
+        if self._expand_fov == 1:
+            warnings.warn(" '_expand_fov' is set to the default value.\nIt could lead to information loss during the sphere->cube projection and cube->sphere projection\nInitialize it properly with 1.25 or larger is strongly recommended.") 
+        delta_angle = self._expand_fov*np.pi/2
+        self._expand_shape = dist*np.tan(delta_angle/2)
+        
+        # back view
+        self._cubemap.append(self.cube_projection(cam, (0,         np.pi/2, delta_angle, delta_angle), resolution))
+        # left view 
+        self._cubemap.append(self.cube_projection(cam, (np.pi/2,   np.pi/2, delta_angle, delta_angle), resolution))
+        # front view
+        self._cubemap.append(self.cube_projection(cam, (np.pi,     np.pi/2, delta_angle, delta_angle), resolution))
+        # right view
+        self._cubemap.append(self.cube_projection(cam, (3*np.pi/2, np.pi/2, delta_angle, delta_angle), resolution))
+        # bottom view - from bottom to top
+        self._cubemap.append(self.cube_projection(cam, (np.pi,     0,       delta_angle, delta_angle), resolution))
+        # top view - from top to bottom
+        self._cubemap.append(self.cube_projection(cam, (np.pi,     np.pi,   delta_angle, delta_angle), resolution))
         
     
     def cube_projection( self, cam:'cam360', direction: tuple,
-                         resolution: tuple=(256,256), dist: float = 1 ) -> np.array:
+                         resolution: tuple=(256,256), dist: float = None ) -> np.array:
         """
             Description: 
             ----------
@@ -252,8 +338,12 @@ class Depth_tool:
             fov_phi   = direction[2]
             fov_theta = direction[3]
             
-        if dist < 1:
+        # if dist is not given, use the default value    
+        if dist is None:
+            dist = self._dist
+        elif dist < 1:
             raise ValueError('INPUT ERROR! The distance between the tangent plane and the center of the sphere should be greater than 1')   
+        
         if center_phi < 0 or center_phi >= 2*np.pi :
             raise ValueError('INPUT ERROR! Phi of the normal line should belong to [0, 2*pi)')   
         if center_theta < 0 or center_theta > np.pi:
@@ -290,7 +380,7 @@ class Depth_tool:
 
 
     def cartesian2spherical( self, phi:float, theta:float, 
-                             width_grids: np.array, height_grids: np.array, dist: float) -> tuple:
+                             width_grids: np.array, height_grids: np.array, dist: float = None) -> tuple:
         """
             Description:
             ----------
@@ -334,6 +424,10 @@ class Depth_tool:
             --------
             >>> cartesian2spherical(center_phi, center_theta, width_grids, height_grids, dist)
         """  
+        # if dist is not given, use the default value    
+        if dist is None:
+            dist = self._dist
+            
         # get the euler coordinate of the tangent point
         center_x, center_y, center_z = pol2eu(theta, phi, dist)
         # compute the length of the projected normal line segment
@@ -353,6 +447,45 @@ class Depth_tool:
         theta_grids[theta_grids>np.pi] = 2*np.pi - theta_grids[theta_grids>np.pi]
         
         return phi_grids, theta_grids
+    
+    
+    def load_depthmap(self, path_to_file: list):
+        if len(path_to_file)==6:
+            if len(self._depthmap) != 0:
+                warnings.warn("Depth maps will be replaced!")
+                self._depthmap = []
+            for ct in range(6):
+                raw_depthmap = read_array(path_to_file[ct])
+                depth_map = self.filt_depthoutliers(raw_depthmap)
+                self._depthmap.append(np.expand_dims(depth_map, axis = 2))
+                
+        elif len(path_to_file)==4:
+            if len(self._depthmap) != 0:
+                warnings.warn("Depth maps will be replaced!")
+                print('Inputs are treated as back, left, front and righ view')
+                self._depthmap = []
+            
+            for ct in range(4):
+                raw_depthmap = read_array(path_to_file[ct])
+                depth_map = self.filt_depthoutliers(raw_depthmap)
+                self._depthmap.append(depth_map)
+            self._depthmap.insert(0, np.zeros(self._depthmap[1].shape))
+            self._depthmap.append(np.zeros(self._depthmap[1].shape))
+        else :
+            raise ValueError('Bad input! Only support 4 and 6 depthmaps.')
+            
+            
+    def filt_depthoutliers(self, depth_map: np.array) -> np.array:
+        min_depth, max_depth = np.percentile(depth_map, [5, 95])
+        depth_map[depth_map < min_depth] = min_depth
+        depth_map[depth_map > max_depth] = max_depth
+        depth_map[depth_map < 0] = 0
+        return depth_map
+    
+    
+#    def generate_cameramodel(rotation: list, translation: list, prefix: str):
+        
+        
         
         
         
