@@ -81,11 +81,10 @@ class Depth_tool:
             cv2.imwrite("omni_depthmap.png", 255*self._omnimage)
     
     
-    def cube2sphere( self, cube_list: list = None, normalize: bool = False,
-                    resolution: tuple = (256, 512), 
-                    order: Optional[tuple] = None):
+    def cube2sphere_fast( self, cube_list: list = None, resolution: tuple = (512,256), order: Optional[tuple] = None):
         """
-            It projects a list of six cubic images to an omnidirectional image. The default resolution of the omnidirectional image is 512x1024.
+            It projects a list of six cubic images to an omnidirectional image. 
+            As it passes one image at a time, it only needs 6 passes to obtain the omni image and so it is faster.
                 
             Parameters
             ----------    
@@ -94,9 +93,9 @@ class Depth_tool:
                 [ 0th:  back  |  1st:  left  |  2nd:  front  |  3rd:  right  |  4th:  top  |  5th:  bottom ]
                 
             resolution : tuple
-                The required resolution for the ouput omnidirectional image, default is 512x1024.
+                The required resolution for the ouput omnidirectional image, default is 1024x512.
                 
-            position :
+            order :
                 TBD, support cubicmaps in different orders.
     
             Returns
@@ -119,19 +118,12 @@ class Depth_tool:
                 cube_list = self._cubemap.copy()
             else:
                 raise ValueError('Bad input! Invalid input image list.')       
-        if normalize:
-            for ct in range(len(cube_list)):
-                cube_list[ct] = (cube_list[ct] - np.min(cube_list[ct]))/(np.max(cube_list[ct]) - np.min(cube_list[ct]))
-                
-        if self._expand_fov == 1 or self._expand_shape == 1:
-            warnings.warn("The omnidirectional image could have some streaks as '_expand_fov' is using the default value.") 
         
         # check the consistency of images' size
-        if cube_list[0].shape != cube_list[1].shape or cube_list[1].shape != cube_list[2].shape or  \
-           cube_list[2].shape != cube_list[3].shape or cube_list[3].shape != cube_list[4].shape or  \
-           cube_list[4].shape != cube_list[5].shape:
-            print('Bad input! All given images should have the same size.')
-            return None            
+        for cube in cube_list:
+            if cube.shape != cube_list[0].shape:            
+                print('Bad input! All given images should have the same size.')
+                return None            
         
         # obtain input image size
         width  = cube_list[0].shape[1]
@@ -143,29 +135,29 @@ class Depth_tool:
         low = [-self._expand_shape*2/width, -self._expand_shape*2/width]
         orders = [height, width]
         
-        # create the Omnidirectional image
+        # create the Omnidirectional image'
         Omni_image = np.zeros([resolution[0]*resolution[1], channel])
         
-        # if the order of images is given 
+        # reorder the cubelist
         if order is not None:
-            print('Setting different order is not supported now.')
-            # TODO:
-                # support different orders
+            if len(order) < len(cube_list):
+                raise ValueError('Inpur Error! The length of "order" should be equal or larger than the length of "cube_list".') 
+            temp = cube_list
+            cube_list = [ [] for i in range(len(temp))]
+            for ind, img in enumerate(temp):
+                cube_list[ order[ind] ] = img         
         
-        # use the default image order 
-        else:
-            for face in range(len(cube_list)):
-                # Create a spline approximation of the camera texture.
-                spline = CubicSplines(low, up, orders, 
-                                      np.reshape(cube_list[face], (height * width, channel)))
-                
-                points, mask_face  = self.spherical2img(face, resolution)
-                Omni_image[ mask_face, :]  = spline.interpolate(points, diff=False)
-                
-            self._omnimage = None
-            self._omnimage = Omni_image.reshape([resolution[0], resolution[1], -1])
+        for face in range(len(cube_list)):
+            # Create a spline approximation of the camera texture.
+            spline = CubicSplines(low, up, orders, 
+                                  np.reshape(cube_list[face], (height * width, channel)))
             
-    
+            points, mask_face  = self.spherical2img(face, resolution)
+            Omni_image[ mask_face, :]  = spline.interpolate(points, diff=False)
+            
+        self._omnimage = None
+        self._omnimage = Omni_image.reshape([resolution[1], resolution[0], -1])
+            
     
     def spherical2img(self, face_num: int, resolution: np.array) -> np.array:
         """
@@ -176,7 +168,7 @@ class Depth_tool:
             face_num : int
                 The face number. [ 0:  back  |  1:  left  |  2:  front  |  3:  right  |  4:  top  |  5:  bottom ]
             resolution : tuple
-                The required resolution for theta and phi.
+                The required resolution for phi and theta.(phi, theta)
                 
             Returns
             -------
@@ -186,8 +178,8 @@ class Depth_tool:
                 A mask vector for the image block on omnidirectional image corresponding to the face_num.
         """
         # generate sphere grids
-        phi   = np.linspace(0, 2*np.pi, num = resolution[1])
-        theta = np.linspace(0, np.pi  , num = resolution[0])
+        phi   = np.linspace(0, 2*np.pi, num = resolution[0])
+        theta = np.linspace(0, np.pi  , num = resolution[1])
         grid_phi, grid_theta = np.meshgrid(phi, theta)
         
         # deal with the 4 horizontal surfaces
@@ -209,9 +201,20 @@ class Depth_tool:
             u = self._expand_shape - np.tan(phi)
             v = self._expand_shape - np.sqrt(1 + np.power(np.tan(phi), 2))/np.tan(theta)
         
-        # the top surface 
-        elif face_num == 4:
-            mask_face = (grid_theta < np.pi/4)
+        # the top and bottom surface 
+        else:
+            mask_face0 = np.abs(1/np.cos(grid_phi)/(np.tan(grid_theta) + 1e-16)) > 1
+            mask_face1 = np.abs(1/np.cos(grid_phi-np.pi/2)/(np.tan(grid_theta) + 1e-16)) > 1
+            mask_face2 = np.abs(1/np.cos(grid_phi-np.pi)/(np.tan(grid_theta) + 1e-16)) > 1
+            mask_face3 = np.abs(1/np.cos(grid_phi-3*np.pi/2)/(np.tan(grid_theta) + 1e-16)) > 1
+            
+            if face_num == 4:
+                mask_center = (grid_theta < np.pi/2)
+            elif face_num == 5:
+                mask_center = (grid_theta > np.pi/2)
+        
+            # combine all masks 
+            mask_face = mask_center*mask_face0*mask_face1*mask_face2*mask_face3
             mask_face = mask_face.flatten()
             
             phi   = grid_phi.flatten()[mask_face]
@@ -221,26 +224,177 @@ class Depth_tool:
             u = self._expand_shape - np.tan(theta)*np.sin(phi)
             v = self._expand_shape - np.tan(theta)*np.cos(phi)
         
-        # the bottom surface       
-        elif face_num == 5:
-            mask_face = (grid_theta > 3*np.pi/4)
-            mask_face = mask_face.flatten()
-            
-            phi   = grid_phi.flatten()[mask_face]
-            theta = grid_theta.flatten()[mask_face]
-            
-            # normalized image coordinates
-            u = self._expand_shape + np.tan(theta)*np.sin(phi)
-            v = self._expand_shape - np.tan(theta)*np.cos(phi)
-        else:
-            raise ValueError('Bad input! The give surface number is not supported.')
-            
         points  = np.column_stack((v, u))
         
         return points, mask_face
     
     
+    def cube2sphere_std(self, cube_list: list = [], fov: float = np.pi/2, 
+                        resolution: tuple = (512, 256), 
+                        order: Optional[list] = None):
+        """
+            It projects a list of cubic images to an omnidirectional image.
+            Since it passes a pixel at a time, it costs more than than the faster version.
+                
+            Parameters
+            ----------    
+            cube_list : a list of cubic images
+                If 'position' is not given and there are 6 images in the list, then the order of the 6 images has to be:
+                [ 0th:  back  |  1st:  left  |  2nd:  front  |  3rd:  right  |  4th:  top  |  5th:  bottom ]
+                
+            fov: float 
+                Field of view of the 6 images
+                
+            resolution : tuple
+                The required resolution for the ouput omnidirectional image, default is 512x256 (phi, theta).
+                
+            order : a list of integer 
+                For each image in the cube_list, the number denotes the direction of the image.
+                [0,1,2,3,4,5] -> default order
+                [5,4,3,2,1,0] -> inverse order, i.e. the first image in the cube_list is the bottom and the second image is the top etc. 
+                If there are only 3 images in the cube_list, then only the first 3 numbers will be considered.
     
+            Returns
+            -------
+            Omni_image : np.array
+                An omnidirectional image generated from the given 6 cubic images.
+            
+            Examples
+            --------
+
+        """
+        if len(cube_list) == 0:
+            if len(self._depthmap) == 6:
+                warnings.warn('Empty cube list, using cubic depth maps.' )
+                cube_list = self._depthmap.copy()
+                fov = self._expand_fov * np.pi/2
+            elif len(self._cubemap) == 6:
+                warnings.warn('Empty cube list, using cubic maps.' )
+                cube_list = self._cubemap.copy()
+                fov = self._expand_fov * np.pi/2
+            else:
+                raise ValueError('Bad input! Invalid input image list.')                
+        for cube in cube_list:
+            if cube.shape != cube_list[0].shape:            
+                raise ValueError('Bad input! All given images should have the same size.')
+        
+        if len(resolution) == 1:
+            resolution = (resolution, resolution)
+        elif len(resolution) != 2:
+            raise ValueError('Inpur Error! Resolution must contain 1 or 2 number.')              
+        if resolution[0] <= 0 or resolution[1] <= 0:
+            raise ValueError('Inpur Error! Resolution must be positive.')
+        
+        # reorder the cubelist
+        if order is not None:
+            if len(order) < len(cube_list):
+                raise ValueError('Inpur Error! The length of "order" should be equal or larger than the length of "cube_list".') 
+            temp = cube_list
+            cube_list = [ [] for i in range(len(temp))]
+            for ind, img in enumerate(temp):
+                cube_list[ order[ind] ] = img         
+        # generate omnidirectional image
+        self._omnimage = self.proj2omnimage(cube_list, fov, resolution)
+    
+    
+    def proj2omnimage(self, cube_list, fov: float, resolution: tuple):
+        
+        pixels = []
+        cubelist_spline = []
+        width, height, channel = cube_list[0].shape[1], cube_list[0].shape[0], cube_list[0].shape[2] 
+    
+        # generate grids on the sphere
+        phi_grids, theta_grids = np.meshgrid( np.linspace(0, 2*np.pi, num=resolution[0], endpoint=False), \
+                                               np.linspace(0, np.pi, num=resolution[1], endpoint=True) )
+        phi_grids = phi_grids.flatten()
+        theta_grids = theta_grids.flatten()
+        
+        # configure interpolation 
+        up  = [np.tan(fov/2), np.tan(fov/2)]
+        low = [-np.tan(fov/2), -np.tan(fov/2)]
+        orders = [height, width]
+        # Create a list of spline approximations for the cube_list.
+        for ct in range(len(cube_list)):
+            # attention: in numpy, indices for 3d data are [layer, row, column], 
+            # so a image has width layers, height rows and 3 columns. Thus for 
+            # the image, the 'reshape' is conducted column by column.
+            spline = CubicSplines(low, up, orders, 
+                                  np.reshape(cube_list[ct], (height * width, channel)))  
+            cubelist_spline.append(spline)
+        
+        # obtain the texture
+        for ct in range(phi_grids.shape[0]):
+            facenum_pixel = self.angle2pixel(phi_grids[ct], theta_grids[ct])
+            pixels.append(facenum_pixel)   
+        # flip the order resulted from the 'reshape' 
+        pixels = np.flip(np.array(pixels)[:,0,:],axis = -1)
+        
+        texture = np.zeros((pixels.shape[0], 3))
+        for face in np.unique(pixels[:,2]):
+            index = pixels[:,2] == face
+            texture[index, :] = cubelist_spline[int(face)].interpolate(pixels[index, :2], diff=False)
+        
+        return texture.reshape([resolution[1], resolution[0], 3])
+    
+    
+    def angle2pixel(self, phi: float, theta: float):
+        
+        face,z = self.which_face(phi,theta)
+        
+        if face == 0:
+            x, y = np.tan(phi), -z
+        elif face == 1:
+            x, y = np.tan(phi - np.pi/2), -z
+        elif face == 2:
+            x, y = np.tan(phi - np.pi)  , -z
+        elif face == 3:
+            x, y = np.tan(phi - 3*np.pi/2), -z
+        elif face == 4:
+            x = -np.tan(theta)*np.sin(phi)
+            y = -np.tan(theta)*np.cos(phi)
+        else:
+            x = np.tan(theta)*np.sin(phi)
+            y = -np.tan(theta)*np.cos(phi)
+        return np.array([[face, x, y]])
+        
+    
+    def which_face(self, phi: float, theta: float):
+            
+        if phi <= np.pi/4 or phi > 7*np.pi/4:
+            z = 1/np.cos(phi)/(np.tan(theta) + 1e-16)
+            if z < -1:
+                face, z = 5, -1
+            elif z > 1:
+                face, z = 4, 1
+            else:
+                face = 0
+        elif np.pi/4 < phi <= 3*np.pi/4:
+            z = 1/np.cos(phi-np.pi/2)/(np.tan(theta) + 1e-16)
+            if z < -1:
+                face, z = 5, -1
+            elif z > 1:
+                face, z = 4, 1
+            else:
+                face = 1
+        elif 3*np.pi/4 < phi <= 5*np.pi/4:
+            z = 1/np.cos(phi-np.pi)/(np.tan(theta) + 1e-16)
+            if z < -1:
+                face, z = 5, -1
+            elif z > 1:
+                face, z = 4, 1
+            else:
+                face = 2
+        elif 5*np.pi/4 < phi <= 7*np.pi/4:
+            z = 1/np.cos(phi-3*np.pi/2)/(np.tan(theta) + 1e-16)
+            if z < -1:
+                face, z = 5, -1
+            elif z > 1:
+                face, z = 4, 1
+            else:
+                face = 3
+        return face, z
+        
+
     def sphere2cube (self, cam:'cam360', resolution: tuple=(256,256), dist: float=None):
         """
             Description: 
@@ -274,8 +428,6 @@ class Depth_tool:
             dist = self._dist
     # generate cubic maps
         # enlarge field of view to include more information for further cube->sphere reconstruction4
-        if self._expand_fov == 1:
-            warnings.warn(" '_expand_fov' is set to the default value.\nIt could lead to information loss during the sphere->cube projection and cube->sphere projection\nInitialize it properly with 1.25 or larger is strongly recommended.") 
         delta_angle = self._expand_fov*np.pi/2
         self._expand_shape = dist*np.tan(delta_angle/2)
         
@@ -449,6 +601,7 @@ class Depth_tool:
         return phi_grids, theta_grids
     
     
+###### adapted from colmap ######
     def load_depthmap(self, path_to_file: list):
         if len(path_to_file)==6:
             if len(self._depthmap) != 0:
@@ -481,7 +634,7 @@ class Depth_tool:
         depth_map[depth_map > max_depth] = max_depth
         depth_map[depth_map < 0] = 0
         return depth_map
-    
+###### end of adapted codes ######
     
 #    def generate_cameramodel(rotation: list, translation: list, prefix: str):
         
