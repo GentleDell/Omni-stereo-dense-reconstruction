@@ -5,18 +5,20 @@ Created on Sat Mar  9 12:00:57 2019
 
 @author: zhantao
 """
-import cv2
 import warnings
-import numpy as np
-from read_dense import read_array
-from spherelib import pol2eu, eu2pol
-
 from typing import Optional
+
+import cv2
+import cam360
+import numpy as np
+from spherelib import pol2eu
+from read_dense import read_array
+
 from interpolation.splines import CubicSplines
 
-import cam360
 
-class Depth_tool:
+
+class CubicMaps:
     
     def __init__(self, dist: float = 1, expand_fov: float=1, expand_shape: Optional[float]=1):
         """
@@ -56,35 +58,42 @@ class Depth_tool:
     def depthmap(self) -> list:
         return self._depthmap
     
-    def save_cubemap(self, prefix: str = ''):
+    def save_cubemap(self, path: str = './', prefix: str = '', index: list = [0,1,2,3,4,5]):
+        
         if len(self._cubemap) == 0:
             warnings.warn("No valid cube map!")
         else:
-            for ind, view in enumerate(self._cubemap):
-                file_name = prefix + 'view' + str(ind)+'.png'
-                cv2.imwrite(file_name, 255*np.flip(view,axis = 2))
+            if max(index) > len(self.cubemap):
+                raise ValueError('Input ERROR! Invalid index')
+            else:
+                for ind in index:
+                    file_name = path + prefix + '_view' + str(ind)+'.png'
+                    cv2.imwrite(file_name, 255*np.flip(self.cubemap[ind],axis = 2))
     
-    def save_cubedepth(self, prefix: str = ''):
+    def save_cubedepth(self, prefix: str = '', path: str = './', index: list = [0,1,2,3,4,5]):
         if len(self._depthmap) == 0:
-            warnings.warn("No valid cube map!")
+            warnings.warn("No valid depth map!")
         else:
-            for ind, view in enumerate(self._depthmap):
-                file_name = prefix + 'view' + str(ind)+'.png'
-                cv2.imwrite(file_name, 255*(view - np.min(view))/(np.max(view)-np.min(view)))
+            if max(index) > len(self.depthmap):
+                raise ValueError('Input ERROR! Invalid index')
+            else:
+                for ind in index:
+                    file_name = path + prefix + '_depthview' + str(ind)+'.png'
+                    cv2.imwrite(file_name, 255*(self.depthmap[ind] - np.min(self.depthmap[ind]))/(np.max(self.depthmap[ind])-np.min(self.depthmap[ind])))
             
-    def save_omnimage(self):
+    def save_omnimage(self, path: str = './'):
         if self._omnimage is None:
             warnings.warn("No valid omnidirectional image!")
         if self._omnimage.shape[2] == 3: 
-            cv2.imwrite("omni_image.png", 255*np.flip(self._omnimage,axis = 2))
+            cv2.imwrite(path + "omni_image.png", 255*np.flip(self._omnimage,axis = 2))
         else: 
-            cv2.imwrite("omni_depthmap.png", 255*self._omnimage)
+            cv2.imwrite(path + "omni_depthmap.png", 255*self._omnimage)
     
     
     def cube2sphere_fast( self, cube_list: list = None, resolution: tuple = (512,256), order: Optional[tuple] = None):
         """
             It projects a list of six cubic images to an omnidirectional image. 
-            As it passes one image at a time, it only needs 6 passes to obtain the omni image and so it is faster.
+            As it passes one image at a time, it only needs 6 passes to obtain the omni image and so it is faster than the cube2sphere_std().
                 
             Parameters
             ----------    
@@ -108,7 +117,7 @@ class Depth_tool:
             >>> from DepthMap_Tools import Depth_tool
             >>> tool_obj = Depth_tool()
             >>> tool_obj.sphere2cube(Omni_obj)
-            >>> Omni_new = tool_obj.cube2sphere( tool_obj._cubemap ) 
+            >>> Omni_new = tool_obj.cube2sphere_fast( tool_obj._cubemap ) 
         """
         # check the cube list, if it is empty, try to use the depth maps or cubic images of the object
         if cube_list is None:
@@ -157,7 +166,7 @@ class Depth_tool:
             
         self._omnimage = None
         self._omnimage = Omni_image.reshape([resolution[1], resolution[0], -1])
-            
+        
     
     def spherical2img(self, face_num: int, resolution: np.array) -> np.array:
         """
@@ -203,6 +212,7 @@ class Depth_tool:
         
         # the top and bottom surface 
         else:
+            # generate mask using element wise bool operation
             mask_face0 = np.abs(1/np.cos(grid_phi)/(np.tan(grid_theta) + 1e-16)) > 1
             mask_face1 = np.abs(1/np.cos(grid_phi-np.pi/2)/(np.tan(grid_theta) + 1e-16)) > 1
             mask_face2 = np.abs(1/np.cos(grid_phi-np.pi)/(np.tan(grid_theta) + 1e-16)) > 1
@@ -233,9 +243,8 @@ class Depth_tool:
                         resolution: tuple = (512, 256), 
                         order: Optional[list] = None):
         """
-            It projects a list of cubic images to an omnidirectional image.
-            Since it passes a pixel at a time, it costs more than than the faster version.
-                
+            This function works on inputs validation and then call proj2omnimage() to do the projection.
+            
             Parameters
             ----------    
             cube_list : a list of cubic images
@@ -261,6 +270,10 @@ class Depth_tool:
             
             Examples
             --------
+            >>> from DepthMap_Tools import Depth_tool
+            >>> tool_obj = Depth_tool()
+            >>> tool_obj.sphere2cube(Omni_obj)
+            >>> Omni_new = tool_obj.cube2sphere_std( tool_obj._cubemap )
 
         """
         if len(cube_list) == 0:
@@ -293,12 +306,33 @@ class Depth_tool:
             cube_list = [ [] for i in range(len(temp))]
             for ind, img in enumerate(temp):
                 cube_list[ order[ind] ] = img         
+                
         # generate omnidirectional image
         self._omnimage = self.proj2omnimage(cube_list, fov, resolution)
     
     
     def proj2omnimage(self, cube_list, fov: float, resolution: tuple):
-        
+        """
+            It projects a list of cubic images to an omnidirectional image.
+            Since it passes a pixel at a time, it costs more time than the faster version.
+                
+            Parameters
+            ----------    
+            cube_list : a list of cubic images
+                If 'position' is not given and there are 6 images in the list, then the order of the 6 images has to be:
+                [ 0th:  back  |  1st:  left  |  2nd:  front  |  3rd:  right  |  4th:  top  |  5th:  bottom ]
+                
+            fov: float 
+                Field of view of the 6 images
+                
+            resolution : tuple
+                The required resolution for the ouput omnidirectional image, default is 512x256 (phi, theta).
+                
+            Returns
+            -------
+            texture : numpy.array 
+                The omnidirectional image generated from the given cubic maps.
+        """
         pixels = []
         cubelist_spline = []
         width, height, channel = cube_list[0].shape[1], cube_list[0].shape[0], cube_list[0].shape[2] 
@@ -338,7 +372,23 @@ class Depth_tool:
     
     
     def angle2pixel(self, phi: float, theta: float):
-        
+        """
+            It projects a given pixel on the sphere to the corresponding pixel on cubic faces.
+                
+            Parameters
+            ----------    
+            phi: float
+                The horizontal angle of the pixel on the sphere. (From negative y direction)
+                
+            theta: float
+                The vertical angle of the pixel on the sphere. (From positive x direction)
+                
+            Returns
+            -------
+            numpy.array: [face, x, y]
+                face: the index of the cubic face where the projected pixel locates;
+                x, y: location of the projected pixel under image coordinate.
+        """
         face,z = self.which_face(phi,theta)
         
         if face == 0:
@@ -359,7 +409,24 @@ class Depth_tool:
         
     
     def which_face(self, phi: float, theta: float):
-            
+        """
+            It returns the index of the cubic face where the given pixel on the sphere corresponds to 
+            as well as the z coordinate of the prjected pixel (can be used as 'y' under image coordinate).
+                
+            Parameters
+            ----------    
+            phi: float
+                The horizontal angle of the pixel on the sphere. (From negative y direction)
+                
+            theta: float
+                The vertical angle of the pixel on the sphere. (From positive x direction)
+                
+            Returns
+            -------
+            numpy.array: [face, x, y]
+                face: the index of the cubic face where the projected pixel locates;
+                x, y: location of the projected pixel under image coordinate.
+        """    
         if phi <= np.pi/4 or phi > 7*np.pi/4:
             z = 1/np.cos(phi)/(np.tan(theta) + 1e-16)
             if z < -1:
@@ -634,12 +701,6 @@ class Depth_tool:
         depth_map[depth_map > max_depth] = max_depth
         depth_map[depth_map < 0] = 0
         return depth_map
-###### end of adapted codes ######
-    
-#    def generate_cameramodel(rotation: list, translation: list, prefix: str):
-        
-        
-        
-        
+###### end of adapted codes ###### 
         
         

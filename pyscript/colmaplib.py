@@ -1,0 +1,77 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+Created on Fri Apr  19 18:39:57 2019
+
+@author: zhantao
+"""
+import os
+import glob
+
+import cv2
+import numpy as np
+
+from cam360 import Cam360
+from cubicmaps import CubicMaps
+
+def create_workspace(image_dir: str='', file_suffix: str='png', work_dir: str='./'):
+        """
+            It projects all omnidirectional images under the given directory to cubic maps. 
+            Then it collects cubic maps according to the view (back/front/laft/right) and 
+            saves diffetent views to the corresponding folders (/work_dir/view0, /work_dir/view1, etc.).
+            
+            Parameters
+            ----------    
+            image_dir : str
+                Path to the omnidirectional images
+                
+            file_suffix : str
+                The format of omnidirectional images 
+                
+            work_dir :
+                Where to save cubic images.
+    
+            Returns
+            -------
+            Omni_image : np.array
+                An omnidirectional image generated from the given 6 cubic images.
+            
+            Examples
+            --------
+            >>> create_workspace(image_dir='./data', file_suffix='png', work_dir = './cubic_maps')
+        """
+        if len(file_suffix) <= 0:
+                raise ValueError("Input ERROR! Invalid file suffix") 
+                
+        try:    
+            cubemap_obj = CubicMaps(expand_fov=1.0)
+            
+            file_pattern = '*.'+file_suffix
+            for filename in glob.glob(os.path.join(image_dir, file_pattern)):
+                # load omnidirectional images
+                Omni_img = np.flip(cv2.imread(filename), axis=2)   
+                Omni_img = Omni_img/np.max(Omni_img)
+                
+                Omni_obj = Cam360(rotation_mtx = np.eye(3), translation_vec=np.zeros([3,1]), 
+                                  height = Omni_img.shape[0], width = Omni_img.shape[1], channels = Omni_img.shape[2], 
+                                  texture= Omni_img)
+                
+                prefix = filename.split(sep='/')[-1][:-4]
+                
+                cubemap_obj.sphere2cube(Omni_obj, resolution=(512,512))
+                
+                for ind in range(len(cubemap_obj.cubemap)):
+                    directory = work_dir + '/view' + str(ind) + '/'
+                    if not os.path.exists(directory):
+                        os.makedirs(directory)
+                        
+                    cubemap_obj.save_cubemap(path = directory, prefix = prefix, index=[ind])     
+                    
+        except:
+            raise ValueError("Input ERROR! Invalid path")
+#           
+#def create_camera_model( intrinsic_para: list=[], num_camera: int = 2, same_camera: bool = True):
+#    if 
+#    
+#def create_imagedb():
+        
