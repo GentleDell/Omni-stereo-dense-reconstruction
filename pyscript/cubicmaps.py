@@ -444,7 +444,7 @@ class CubicMaps:
         self._omnimage = self.proj2omnimage(cube_list, fov, resolution)
     
     
-    def proj2omnimage(self, cube_list: list = [], fov: float, resolution: tuple):
+    def proj2omnimage(self, cube_list: list, fov: float, resolution: tuple):
         """
             It projects a list of cubic images to an omnidirectional image.
             Since it passes a pixel at a time, it costs more time than the faster version.
