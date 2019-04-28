@@ -13,7 +13,7 @@ import cam360
 import numpy as np
 from spherelib import pol2eu
 from read_dense import read_array
-
+ 
 from interpolation.splines import CubicSplines
 
 
@@ -166,7 +166,7 @@ class CubicMaps:
         if self._omnimage.shape[2] == 3: 
             cv2.imwrite(path + "omni_image.png", 255*np.flip(self._omnimage,axis = 2))
         else: 
-            cv2.imwrite(path + "omni_depthmap.png", 255*self._omnimage)
+            cv2.imwrite(path + "omni_depthmap.exr", self._omnimage.astype(np.float32))
     
     
     def depth_trans(self, depthmap: np.ndarray=None, camera_parameters: list = None) -> np.ndarray:
@@ -180,7 +180,12 @@ class CubicMaps:
                 Depthmap to be converted;
                 
             camera_parameters: list
-                Camera parameters to convert the depthmap;
+                Camera parameters to convert the depthmap: [fx, fy, cx, cy];
+                
+            Returns
+            -------
+            radius_depth : np.array
+                Depthmap using radial distance as depth.
                 
             Examples
             --------
@@ -204,8 +209,8 @@ class CubicMaps:
             col_dst = np.arange(depthmap.shape[1]) - cam_center_col + 1
             col_dist_mat = np.tile( col_dst, (depthmap.shape[0], 1))
             
-            radius = depthmap * np.sqrt(1 + (row_dist_mat/fy)**2 + (col_dist_mat/fx)**2)
-        return radius
+            radius_depth = depthmap * np.sqrt(1 + (row_dist_mat/fy)**2 + (col_dist_mat/fx)**2)
+        return radius_depth
     
     
     def cube2sphere_fast( self, cube_list: list = None, resolution: tuple = (256, 512), order: Optional[list] = None):
@@ -250,10 +255,13 @@ class CubicMaps:
                 raise ValueError('Bad input! Invalid input image list.')       
         
         # check the consistency of images' size
-        for cube in cube_list:
-            if cube.shape != cube_list[0].shape:            
+        for ind, cube in enumerate(cube_list):
+            if cube.shape[:2] != cube_list[0].shape[:2]:            
                 print('Bad input! All given images should have the same size.')
-                return None            
+                return None
+            # if is depth map
+            if len(cube.shape) == 2:      
+                cube_list[ind] = np.expand_dims(cube, axis=2)
         
         # obtain input image size
         width  = cube_list[0].shape[1]
@@ -818,8 +826,7 @@ class CubicMaps:
         theta_grids[theta_grids>np.pi] = 2*np.pi - theta_grids[theta_grids>np.pi]
         
         return phi_grids, theta_grids
-    
-    
+        
 ###### adapted from colmap ######
     def load_depthmap(self, path_to_file: list):
         if len(path_to_file)==6:
@@ -841,18 +848,15 @@ class CubicMaps:
                 raw_depthmap = read_array(path_to_file[ct])
                 depth_map = self.filt_depthoutliers(raw_depthmap)
                 self._depthmap.append(depth_map)
-            self._depthmap.insert(0, np.zeros(self._depthmap[1].shape))
+            self._depthmap.append(np.zeros(self._depthmap[1].shape))
             self._depthmap.append(np.zeros(self._depthmap[1].shape))
         else :
             raise ValueError('Bad input! Only support 4 and 6 depthmaps.')
             
             
     def filt_depthoutliers(self, depth_map: np.array) -> np.array:
-        min_depth, max_depth = np.percentile(depth_map, [5, 95])
+        min_depth, max_depth = np.percentile(depth_map, [10, 90])
         depth_map[depth_map < min_depth] = min_depth
         depth_map[depth_map > max_depth] = max_depth
-        depth_map[depth_map < 0] = 0
         return depth_map
 ###### end of adapted codes ###### 
-        
-        
