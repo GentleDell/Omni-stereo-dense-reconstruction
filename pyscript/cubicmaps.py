@@ -193,11 +193,16 @@ class CubicMaps:
         '''
         if depthmap is None or camera_parameters is None:
             raise ValueError('Input ERROR! Invalid input image or camera parameters')
-        elif len(depthmap.shape) != 2:
+        elif len(depthmap.shape) < 2:
             raise ValueError('Input ERROR! The input image should be a 2D matrix')
         elif sum(np.array(camera_parameters) <= 0) > 0:
             raise ValueError('Input ERROR! Invalid camera parameters')
         else:
+            mat_3d = False
+            if len(depthmap.shape) > 2:
+                mat_3d = True
+                depthmap = depthmap.squeeze(axis = 2)
+                
             fx = camera_parameters[0]
             fy = camera_parameters[1]
             cam_center_row = camera_parameters[2]
@@ -210,6 +215,10 @@ class CubicMaps:
             col_dist_mat = np.tile( col_dst, (depthmap.shape[0], 1))
             
             radius_depth = depthmap * np.sqrt(1 + (row_dist_mat/fy)**2 + (col_dist_mat/fx)**2)
+            
+            if mat_3d:
+                radius_depth = np.expand_dims(radius_depth, axis = 2)
+            
         return radius_depth
     
     
@@ -259,7 +268,7 @@ class CubicMaps:
             if cube.shape[:2] != cube_list[0].shape[:2]:            
                 print('Bad input! All given images should have the same size.')
                 return None
-            # if is depth map
+            # if is depth map from .exr file
             if len(cube.shape) == 2:      
                 cube_list[ind] = np.expand_dims(cube, axis=2)
         
@@ -847,7 +856,7 @@ class CubicMaps:
             for ct in range(4):
                 raw_depthmap = read_array(path_to_file[ct])
                 depth_map = self.filt_depthoutliers(raw_depthmap)
-                self._depthmap.append(depth_map)
+                self._depthmap.append(np.expand_dims(depth_map, axis = 2))
             self._depthmap.append(np.zeros(self._depthmap[1].shape))
             self._depthmap.append(np.zeros(self._depthmap[1].shape))
         else :

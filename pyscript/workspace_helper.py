@@ -11,6 +11,7 @@ from typing import Optional
 
 import cv2
 import numpy as np
+import matplotlib.pyplot as plt
 
 from cam360 import Cam360
 from cubicmaps import CubicMaps
@@ -60,7 +61,8 @@ VIEW_ROT = np.array([[[-1,0,0], [0,0,-1], [0,-1,0]],
 
 
 def create_workspace(image_dir: str='', file_suffix: str='png', work_dir: str='./', 
-                     camera_parameters: list = None, reference_pose: list = None):
+                     camera_parameters: list = None, reference_pose: list = None,
+                     resolution: tuple = (256,256)):
     """
         It projects all omnidirectional images under the given directory to cubic maps. 
         Then it collects cubic maps according to the view (back/front/laft/right) and 
@@ -81,12 +83,15 @@ def create_workspace(image_dir: str='', file_suffix: str='png', work_dir: str='.
             This is a list of list. In each sublist, it contains parameters to be saved, including: [fx, fy, cx, cy].
             Different sublists represent different cameras. 
             
-        reference_pose: list -> [w, x, y, z, tx, ty, tz ]
+        reference_pose: list -> [qw, qx, qy, qz, tx, ty, tz ]
             Quaternion and translation vector.
             The pose of the center camera (the camera in the center of the camera array).
             When using several images in a folder to reconstruct a scene, the colmap will locate each image(camera) by their
             relative poes to the center image(camera). So, to ceate a workspace for colmap, the relative poses are required.
             Therefore, the pose of the center image(camera) is required to be specified.
+            
+        resolution: tuple
+            The resolution of cube maps.
         
         Examples
         --------
@@ -95,7 +100,10 @@ def create_workspace(image_dir: str='', file_suffix: str='png', work_dir: str='.
     """
     
     if len(file_suffix) <= 0:
-            raise ValueError("Input ERROR! Invalid file suffix") 
+        raise ValueError("Input ERROR! Invalid file suffix") 
+    for camera in camera_parameters:
+        if camera[2] >= resolution[0] or camera[3] >= resolution[1]:
+            raise ValueError("Input ERROR! Camera center should be around image center!") 
     # initialize a CubeMaps object
     cubemap_obj = CubicMaps()
     # initialize a list of flags to record whether the camera model for the 
@@ -116,7 +124,7 @@ def create_workspace(image_dir: str='', file_suffix: str='png', work_dir: str='.
                           height = Omni_img.shape[0], width = Omni_img.shape[1], channels = Omni_img.shape[2], 
                           texture= Omni_img)
         # project the omnidirectional image to 6 cubemaps
-        cubemap_obj.sphere2cube(Omni_obj, resolution=(512,512))
+        cubemap_obj.sphere2cube(Omni_obj, resolution=resolution)
         # save the cubemaps
         for ind in range(len(cubemap_obj.cubemap)):
             directory = work_dir + '/view' + str(ind) + '/'
@@ -148,7 +156,8 @@ def create_workspace(image_dir: str='', file_suffix: str='png', work_dir: str='.
                         
 
 def create_depth_workspace(image_dir: str='', file_suffix: str='exr', work_dir: str='./',
-                           radius_depth: Optional[bool] = False, cam_para: Optional[list] = None):
+                           radius_depth: Optional[bool] = False, cam_para: Optional[list] = None,
+                           resolution: tuple = (256,256)):
     """
         It projects all omnidirectional depthmaps under the given directory to cubic maps. 
         Then it collects cubic depthmaps according to the view (back/front/laft/right) and 
@@ -172,6 +181,9 @@ def create_depth_workspace(image_dir: str='', file_suffix: str='exr', work_dir: 
         cam_para: list
             List of camera parameters, containing 3 parameters: 
             [focal length x, focal length y, camera center on rows, camera center on columns]
+            
+        resolution: tuple
+            The resolution of cube maps.
 
         Returns
         -------
@@ -199,7 +211,7 @@ def create_depth_workspace(image_dir: str='', file_suffix: str='exr', work_dir: 
                           height = Omni_dep.shape[0], width = Omni_dep.shape[1], channels = 1, 
                           depth = Omni_dep)
         # project the omnidirectional image to 6 cubemaps
-        cubemap_obj.sphere2cube(Omni_obj, resolution=(512,512), is_depth = True)
+        cubemap_obj.sphere2cube(Omni_obj, resolution=resolution, is_depth = True)
         # save the cubemaps
         for ind in range(len(cubemap_obj.depthmap)):
             directory = work_dir + '/view' + str(ind) + '/'
@@ -374,16 +386,25 @@ def pose_from_name(name:str, ref_pose: np.array, view_index: int):
     return quat_final, translation
 
 
-def project_colmap_depth(path_to_file: list=None, output_resolution: tuple=None, 
-                               use_radial_dist: bool = False, camera_para: list=None, 
-                               save: bool = True) -> np.array:
+def project_colmap_depth(path: str, view_name: str = None,
+                         views_list: list = [],
+                         output_resolution: tuple=None, 
+                         use_radial_dist: bool = False,
+                         camera_para: list=None, 
+                         save: bool = True) -> np.array:
     '''
         It loads 6 or 4 cubemaps from the given path and merge them to a omnidirectional depth map.
         
         Parameters
         ----------    
-        path_to_file: list
-            A list of path to the 6 or 4 cubic depthmaps.
+        path: str
+            The path to the 6 views. For example, '../depthmap/castle/fixed/allviews/'
+            
+        view_name: str
+            The name of the view. For example, 'test_0_0_1_1024_5120000';
+            
+        views_list: list
+            A list of integer denoting the views to be loaded;
             
         output_resolution: tuple
             The resolution of the output omnidirectional image.
@@ -404,15 +425,23 @@ def project_colmap_depth(path_to_file: list=None, output_resolution: tuple=None,
         
         Example:
         --------
-        >>> estimated = merge_cubedepth_fromcolmap(path_to_file = path_to_dmap,
-                                                   output_resolution = [512,1024], 
-                                                   use_radial_dist = True, 
-                                                   camera_para = [267,267,256,256],
-                                                   save = False)
+        >>> estimated = project_colmap_depth(path = path_to_dmap, 
+                                 view_name = name_pattern,
+                                 views_list = [0,1,2,3],
+                                 output_resolution=(512, 1024), 
+                                 use_radial_dist=True, 
+                                 camera_para=[267,267,256,256],
+                                 save=False)
     '''
-    if len(path_to_file) != 4 and len(path_to_file) != 6:
-        raise ValueError("Input ERROR! Only 4 or 6 depth maps are supported!")
-        
+    if len(views_list) <= 0:
+        raise ValueError("Input ERROR! Please specify the views to be loaded.")
+    elif view_name is None:
+        raise ValueError("Input ERROR! Please specify the name of the views to be loaded.")
+    else:
+        path_to_file = []
+        for ind in views_list:
+            path_to_file.append(path + '/view' + str(ind) + '/' + view_name + '_view' + str(ind) + '.*')
+    
     cubemap = CubicMaps()
     cubemap.load_depthmap(path_to_file=path_to_file)
     
@@ -431,4 +460,118 @@ def project_colmap_depth(path_to_file: list=None, output_resolution: tuple=None,
         cubemap.save_omnimage()
     
     return cubemap.omnimage
+    
+
+def evaluate(estimation: np.array, GT: np.array, checking_line: int = 100, save: bool = False):   
+    '''
+        It compares the two given images. 
+        
+        Parameters
+        ----------    
+        estimation: np.array
+            Estimated depth map.
+            
+        GT: np.array
+            The ground truth.
+            
+        checking_line: int
+            The position of the vertical line along which the depth will be ploted.
+            
+        camera_para: list
+            A list of camera parameters: [fx, fy, cx, cy]
+            
+        save: bool
+            Whether to save the estimated depth map, ground truth as well as the difference map.
+        
+        Return:
+        --------
+            Raw RMSE and RMSE, the raw means that the depth errors from all 
+            pixels are counted, including the sky and the ground.
+        
+        Example:
+        --------
+        >>> estimated = merge_cubedepth_fromcolmap(path_to_file = path_to_dmap,
+                                                   output_resolution = [512,1024], 
+                                                   use_radial_dist = True, 
+                                                   camera_para = [267,267,256,256],
+                                                   save = False)
+    '''
+    
+    plt.figure(figsize=[12,11])
+    min_d_toshow = max(estimation.min(), GT.min())
+    max_d_toshow = min(estimation.max(), GT.max())
+
+    if not save:
+        plt.subplot(321)
+        plt.imshow(estimation, cmap = 'magma', vmin=min_d_toshow, vmax=max_d_toshow);
+        plt.axis('off')
+        plt.title('Estimated Depth')
+    else:   
+        plt.imshow(estimation, cmap = 'magma', vmin=min_d_toshow, vmax=max_d_toshow);
+        plt.axis('off')
+        plt.savefig('estimated_depthmap.png', dpi=300, bbox_inches="tight")
+    
+    if not save:
+        plt.subplot(322)
+        plt.imshow(GT, cmap = 'magma', vmin=min_d_toshow, vmax=max_d_toshow)
+        plt.axis('off')
+        plt.title('Ground Truth')
+    else:
+        plt.imshow(GT, cmap = 'magma', vmin=min_d_toshow, vmax=max_d_toshow)
+        plt.axis('off')
+        plt.savefig('Groundtruth_depthmap.png', dpi=300, bbox_inches="tight")
+
+    plt.subplot(323)
+    plt.plot(GT[:,checking_line]);
+    plt.plot(estimation[:,checking_line]);
+    plt.xlabel('sky ------------------> ground \n Top to Bottom')
+    plt.ylabel('Depth \n close ------------------> far')
+    plt.title('Depth along the vertical line at ' + str(checking_line) + 'th column')
+    plt.legend(['ground truth', 'estimation'])
+    plt.grid()
+
+    plt.subplot(324)
+    errors = abs(GT[:,checking_line] - estimation[:,checking_line])
+    errors[errors > 20] = 0
+    plt.plot(errors)
+    plt.xlabel('sky ------------------> ground \n Top to Bottom')
+    plt.ylabel('Absolute Error');
+    plt.title('Absolute error along the vertical line at ' + str(checking_line) + 'th row')
+    plt.grid()
+    
+    plt.subplot(325)
+    plt.plot(GT[checking_line,:]);
+    plt.plot(estimation[checking_line,:]);
+    plt.xlabel('left ------------------> right \n ')
+    plt.ylabel('Depth \n close ------------------> far')
+    plt.title('Depth along the horizontal line at ' + str(checking_line) + 'th column')
+    plt.legend(['ground truth', 'estimation'])
+    plt.grid()
+
+    plt.subplot(326)
+    errors = abs(GT[checking_line,:] - estimation[checking_line,:])
+    errors[errors > 20] = 0
+    plt.plot(errors)
+    plt.xlabel('left ------------------> right')
+    plt.ylabel('Absolute Error');
+    plt.title('Absolute error along the horizontal line at ' + str(checking_line) + 'th row')
+    plt.grid()
+    plt.tight_layout()
+
+    plt.figure(figsize=[10,6])
+    plt.imshow(np.abs(estimation - GT), cmap='RdYlGn_r', interpolation='nearest')
+    plt.colorbar()
+    plt.title('Absolute Error map -- Green(small error) to red(large error)')
+    if save:
+        plt.savefig('Error_maps.png', dpi=300, bbox_inches="tight")
+
+    diff_map = (estimation - GT)
+    raw_RMSE = np.sqrt(np.sum(diff_map**2)/(GT.size))
+    print('The raw RMSE is:', raw_RMSE )
+    
+    diff_map[np.abs(diff_map)>20] = 0
+    RMSE = np.sqrt(np.sum(diff_map**2)/(GT.size))
+    print('The RMSE without outliers is:', RMSE )
+    
+    return raw_RMSE, RMSE
     

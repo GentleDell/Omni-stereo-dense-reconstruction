@@ -29,11 +29,13 @@
 #
 # Author: Johannes L. Schoenberger (jsch-at-demuc-dot-de)
 
+import glob
 import numpy as np
 import pylab as plt
 
 
 def read_array(path):
+    path = glob.glob(path)[0]
     with open(path, "rb") as fid:
         width, height, channels = np.genfromtxt(fid, delimiter="&", max_rows=1,
                                                 usecols=(0, 1, 2), dtype=int)
