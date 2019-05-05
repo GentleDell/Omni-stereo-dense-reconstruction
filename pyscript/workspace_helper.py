@@ -497,81 +497,125 @@ def evaluate(estimation: np.array, GT: np.array, checking_line: int = 100, save:
                                                    save = False)
     '''
     
-    plt.figure(figsize=[12,11])
-    min_d_toshow = max(estimation.min(), GT.min())
-    max_d_toshow = min(estimation.max(), GT.max())
+    plt.figure(figsize=[12,12])
+    min_d_toshow = min(estimation.min(), GT.min())
+    max_d_toshow = max(estimation.max(), GT.max())
 
     if not save:
         plt.subplot(321)
         plt.imshow(estimation, cmap = 'magma', vmin=min_d_toshow, vmax=max_d_toshow);
         plt.axis('off')
         plt.title('Estimated Depth')
-    else:   
-        plt.imshow(estimation, cmap = 'magma', vmin=min_d_toshow, vmax=max_d_toshow);
-        plt.axis('off')
-        plt.savefig('estimated_depthmap.png', dpi=300, bbox_inches="tight")
-    
-    if not save:
+        
         plt.subplot(322)
         plt.imshow(GT, cmap = 'magma', vmin=min_d_toshow, vmax=max_d_toshow)
         plt.axis('off')
         plt.title('Ground Truth')
-    else:
+        
+        plt.subplot(323)
+        plt.plot(GT[:,checking_line]);
+        plt.plot(estimation[:,checking_line]);
+        plt.xlabel('sky ------------------> ground \n Top to Bottom')
+        plt.ylabel('Depth \n close ------------------> far')
+        plt.title('Depth along the vertical line at ' + str(checking_line) + 'th column')
+        plt.legend(['ground truth', 'estimation'])
+        plt.grid()
+    
+        plt.subplot(324)
+        errors = abs(GT[:,checking_line] - estimation[:,checking_line])
+        errors[errors > 20] = 0
+        plt.plot(errors)
+        plt.xlabel('sky ------------------> ground \n Top to Bottom')
+        plt.ylabel('Absolute Error');
+        plt.title('Absolute error along the vertical line at ' + str(checking_line) + 'th column')
+        plt.grid()
+        
+        plt.subplot(325)
+        plt.plot(GT[checking_line,:]);
+        plt.plot(estimation[checking_line,:]);
+        plt.xlabel('left ------------------> right \n ')
+        plt.ylabel('Depth \n close ------------------> far')
+        plt.title('Depth along the horizontal line at ' + str(checking_line) + 'th row')
+        plt.legend(['ground truth', 'estimation'])
+        plt.grid()
+    
+        plt.subplot(326)
+        errors = abs(GT[checking_line,:] - estimation[checking_line,:])
+        errors[errors > 20] = 0
+        plt.plot(errors)
+        plt.xlabel('left ------------------> right')
+        plt.ylabel('Absolute Error');
+        plt.title('Absolute error along the horizontal line at ' + str(checking_line) + 'th row')
+        plt.grid()
+        plt.tight_layout()
+    else:   
+        plt.imshow(estimation, cmap = 'magma', vmin=min_d_toshow, vmax=max_d_toshow);
+        plt.axis('off')
+        plt.savefig('estimated_depthmap.png', dpi=300, bbox_inches="tight")
+        
         plt.imshow(GT, cmap = 'magma', vmin=min_d_toshow, vmax=max_d_toshow)
         plt.axis('off')
         plt.savefig('Groundtruth_depthmap.png', dpi=300, bbox_inches="tight")
-
-    plt.subplot(323)
-    plt.plot(GT[:,checking_line]);
-    plt.plot(estimation[:,checking_line]);
-    plt.xlabel('sky ------------------> ground \n Top to Bottom')
-    plt.ylabel('Depth \n close ------------------> far')
-    plt.title('Depth along the vertical line at ' + str(checking_line) + 'th column')
-    plt.legend(['ground truth', 'estimation'])
-    plt.grid()
-
-    plt.subplot(324)
-    errors = abs(GT[:,checking_line] - estimation[:,checking_line])
-    errors[errors > 20] = 0
-    plt.plot(errors)
-    plt.xlabel('sky ------------------> ground \n Top to Bottom')
-    plt.ylabel('Absolute Error');
-    plt.title('Absolute error along the vertical line at ' + str(checking_line) + 'th row')
-    plt.grid()
     
-    plt.subplot(325)
-    plt.plot(GT[checking_line,:]);
-    plt.plot(estimation[checking_line,:]);
-    plt.xlabel('left ------------------> right \n ')
-    plt.ylabel('Depth \n close ------------------> far')
-    plt.title('Depth along the horizontal line at ' + str(checking_line) + 'th column')
-    plt.legend(['ground truth', 'estimation'])
-    plt.grid()
+        plt.figure()
+        plt.plot(GT[:,checking_line]);
+        plt.plot(estimation[:,checking_line]);
+        plt.xlabel('sky ------------------> ground \n Top to Bottom')
+        plt.ylabel('Depth \n close ------------------> far')
+        plt.title('Depth along the vertical line at ' + str(checking_line) + 'th column')
+        plt.legend(['ground truth', 'estimation'])
+        plt.grid()
+        plt.savefig('Depth_along' + str(checking_line) + 'th_column.png', dpi = 300)
+        
+        plt.figure()
+        errors = abs(GT[:,checking_line] - estimation[:,checking_line])
+        errors[errors > 20] = 0
+        plt.plot(errors)
+        plt.xlabel('sky ------------------> ground \n Top to Bottom')
+        plt.ylabel('Absolute Error');
+        plt.title('Absolute error along the vertical line at ' + str(checking_line) + 'th column')
+        plt.grid()
+        plt.savefig('Absolute_error_along' + str(checking_line) + 'th_column.png', dpi = 300)
+        
+        plt.figure()
+        plt.plot(GT[checking_line,:]);
+        plt.plot(estimation[checking_line,:]);
+        plt.xlabel('left ------------------> right \n ')
+        plt.ylabel('Depth \n close ------------------> far')
+        plt.title('Depth along the horizontal line at ' + str(checking_line) + 'th row')
+        plt.legend(['ground truth', 'estimation'])
+        plt.grid()
+        plt.savefig('Depth_along' + str(checking_line) + 'th_row.png', dpi = 300)
+        
+        plt.figure()
+        errors = abs(GT[checking_line,:] - estimation[checking_line,:])
+        errors[errors > 20] = 0
+        plt.plot(errors)
+        plt.xlabel('left ------------------> right')
+        plt.ylabel('Absolute Error');
+        plt.title('Absolute error along the horizontal line at ' + str(checking_line) + 'th row')
+        plt.grid()
+        plt.savefig('Absolute_error_along' + str(checking_line) + 'th_row.png', dpi = 300)
+    
+    # calculate rmse from all pixels
+    diff_map = abs(estimation - GT)
+    raw_RMSE = np.sqrt(np.sum(diff_map**2)/(GT.size))
+    print('The raw RMSE is:', raw_RMSE )
 
-    plt.subplot(326)
-    errors = abs(GT[checking_line,:] - estimation[checking_line,:])
-    errors[errors > 20] = 0
-    plt.plot(errors)
-    plt.xlabel('left ------------------> right')
-    plt.ylabel('Absolute Error');
-    plt.title('Absolute error along the horizontal line at ' + str(checking_line) + 'th row')
-    plt.grid()
-    plt.tight_layout()
+    # calculate rmse from estimated pixels
+    mask = np.logical_and(estimation!=0, diff_map<20)
+    masked_RMSE = np.sqrt(np.sum(diff_map[mask]**2)/(mask.size))
+    print('The masked RMSE is:', masked_RMSE )
+
+    # to make the error map clear, set this threshold
+    threshold = 10
+    diff_map[np.abs(diff_map)>threshold] = threshold
 
     plt.figure(figsize=[10,6])
-    plt.imshow(np.abs(estimation - GT), cmap='RdYlGn_r', interpolation='nearest')
+    plt.imshow(np.abs(diff_map), cmap='RdYlGn_r', interpolation='nearest', vmin=0, vmax=threshold)
     plt.colorbar()
     plt.title('Absolute Error map -- Green(small error) to red(large error)')
     if save:
         plt.savefig('Error_maps.png', dpi=300, bbox_inches="tight")
 
-    diff_map = (estimation - GT)
-    raw_RMSE = np.sqrt(np.sum(diff_map**2)/(GT.size))
-    print('The raw RMSE is:', raw_RMSE )
-    
-    diff_map[np.abs(diff_map)>20] = 0
-    RMSE = np.sqrt(np.sum(diff_map**2)/(GT.size))
-    print('The RMSE without outliers is:', RMSE )
-    
-    return raw_RMSE, RMSE
-    
+    return raw_RMSE

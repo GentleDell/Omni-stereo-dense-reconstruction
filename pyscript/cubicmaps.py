@@ -835,6 +835,53 @@ class CubicMaps:
         theta_grids[theta_grids>np.pi] = 2*np.pi - theta_grids[theta_grids>np.pi]
         
         return phi_grids, theta_grids
+    
+    
+    def estimate_cubic_foclen(self, depthmap: list = None, fov: tuple = None) -> list:
+        
+        if fov is None or len(fov) != 2:
+            raise ValueError('Input ERROR! Invalid fov (field of view)')
+        elif fov[0] <= 0 or fov[1] <= 0:
+            raise ValueError('Input ERROR! Field of view of a image should be greater than 0')
+            
+        if depthmap is None:
+            if len(self.depthmap) > 0:
+                print('Depth list is not given; the cubic depth maps inside the object will be used!')
+                depthmap = self.depthmap
+            else:
+                raise ValueError('Input ERROR! No valid depth map is given')
+                
+        fx = []
+        fy = []
+        cx = (depthmap[0].shape[1]-1)/2
+        cy = (depthmap[0].shape[0]-1)/2
+        
+        half_x = np.tan(fov[1]/2)
+        half_y = np.tan(fov[0]/2)
+        
+        # here in np, ndarry is organized in [column, row, channel]
+        x = np.linspace(start = 0, stop = depthmap[0].shape[1]-1, num = cx*2 + 1)/cx - 1
+        y = np.linspace(start = 0, stop = depthmap[0].shape[0]-1, num = cy*2 + 1)/cy - 1
+        grid_x, grid_y = np.meshgrid(x, y)
+        
+        norm_grid_x = half_x*grid_x
+        norm_grid_y = half_y*grid_y
+        
+        grid_theta = np.pi/2 + np.arctan2(norm_grid_y, np.sqrt(norm_grid_x**2+1))
+        grid_phi = np.arctan2(norm_grid_x, 1)
+        
+        for depth in depthmap:
+            grid_Y = depth*np.cos(grid_theta)
+            grid_X = depth*np.sin(grid_theta)*np.sin(grid_phi)
+            grid_Z = depth*np.sin(grid_theta)*np.cos(grid_phi)
+            
+            pix_x = (grid_x + 1)*cx - cx
+            pix_y = (grid_y + 1)*cy - cy
+
+            fx.append(np.mean( (grid_Z*pix_x/grid_X) ))
+            fy.append(np.mean( -(grid_Z*pix_y/grid_Y) ))
+        return fx, fy
+        
         
 ###### adapted from colmap ######
     def load_depthmap(self, path_to_file: list):
