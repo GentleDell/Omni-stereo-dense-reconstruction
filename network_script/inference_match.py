@@ -1,25 +1,26 @@
 from __future__ import print_function
 import os
-import numpy as np
 import argparse
-import torch
-import torch.nn as nn
-import torch.nn.functional as F
-from torch.autograd import Variable
-from torchvision import datasets, transforms
+import numpy as np
+
+import png
 from PIL import Image
 import matplotlib.pyplot as plt
-from src.nets_test import *
+
+import torch
+from torch.autograd import Variable
+from torchvision import transforms
+from src.nets_test import Net
 
 parser = argparse.ArgumentParser()
-parser.add_argument("--dataset_dir",     type=str, default='./data_scene_flow/training', help="where the dataset is stored")
+parser.add_argument("--dataset_dir",     type=str, default='../../../dataset/kitti_sceneflow/training/', help="where the dataset is stored")
 parser.add_argument("--save_root",       type=str, default='./dataset', help="Where to dump the data")
-parser.add_argument("--checkpoint_dir",  type=str, default='./saved_models/kitti_b128_3pxloss', help="Where the ckpt files are")
-parser.add_argument("--checkpoint_file", type=str, default='edlsm_38000.ckpt', help="checkpoint file name to load")
+parser.add_argument("--checkpoint_dir",  type=str, default='./checkpoints', help="Where the ckpt files are")
+parser.add_argument("--checkpoint_file", type=str, default='edlsm_latest49999.ckpt', help="checkpoint file name to load")
 parser.add_argument("--resize_image",    type=str, default='True', help="Resize image")
-parser.add_argument("--test_num",        type=int, default=80,   help="Image number to do inference")
+parser.add_argument("--test_num",        type=int, default=133,   help="Image number to do inference")
 parser.add_argument("--disp_range",      type=int, default=128,  help="Search range for disparity")
-parser.add_argument("--use_gpu",         type=int, default=1,    help="Check to use GPU")
+parser.add_argument("--gpu_index",       type=int, default=0,    help="The index of the gpu to be used; -1 means on cpu")
 
 args = parser.parse_args()
 print('----------------------------------------')
@@ -70,14 +71,17 @@ model_fn = os.path.join(args.checkpoint_dir, args.checkpoint_file)
 # Build Test Graph
 net = Net(nChannel)
 # Loading the trained model
-net.load_state_dict(torch.load(model_fn))
+if args.gpu_index != -1:
+    net.load_state_dict(torch.load(model_fn, map_location=lambda storage, loc: storage.cuda(args.gpu_index)))
+else:
+    net.load_state_dict(torch.load(model_fn, map_location=lambda storage, loc: storage))
 net.eval()
 print(net)
 print('Model Loaded')
 
 # Check to use GPU
-if args.use_gpu:
-    net = net.cuda()
+if args.gpu_index != -1:
+    net = net.cuda(args.gpu_index)
 
 # Load the images
 ll_image, rr_image, ll_image1, rr_image1 = load_and_resize_l_and_r_image(args.test_num)
@@ -94,9 +98,9 @@ print('Image size:', img_h, img_w)
 l_img = l_img.view(1, l_img.size(0), l_img.size(1), l_img.size(2))
 r_img = r_img.view(1, r_img.size(0), r_img.size(1), r_img.size(2))
 
-if args.use_gpu:
-    l_img = l_img.cuda()
-    r_img = r_img.cuda()
+if args.gpu_index != -1:
+    l_img = l_img.cuda(args.gpu_index)
+    r_img = r_img.cuda(args.gpu_index)
 
 # Forward pass. extract deep features
 left_feat = net(Variable(l_img, requires_grad=False))
@@ -145,6 +149,7 @@ pred_disp1 = pred_1.view(unary_vol.size(0), unary_vol.size(1))
 pred_disp2 = pred_2.view(unary_vol.size(0), unary_vol.size(1))
 
 # Display the images
+plt.figure(figsize=[10,10])
 plt.subplot(411)
 plt.imshow(ll_image1)
 plt.title('Left Image')
