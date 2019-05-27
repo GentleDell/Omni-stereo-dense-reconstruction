@@ -14,13 +14,14 @@ from src.nets_test import Net
 
 parser = argparse.ArgumentParser()
 parser.add_argument("--dataset_dir",     type=str, default='../../../dataset/kitti_sceneflow/training/', help="where the dataset is stored")
-parser.add_argument("--save_root",       type=str, default='./dataset', help="Where to dump the data")
+parser.add_argument("--save_root",       type=str, default='./dataset',     help="Where to dump the data")
 parser.add_argument("--checkpoint_dir",  type=str, default='./checkpoints', help="Where the ckpt files are")
 parser.add_argument("--checkpoint_file", type=str, default='edlsm_latest49999.ckpt', help="checkpoint file name to load")
 parser.add_argument("--resize_image",    type=str, default='True', help="Resize image")
-parser.add_argument("--test_num",        type=int, default=133,   help="Image number to do inference")
-parser.add_argument("--disp_range",      type=int, default=128,  help="Search range for disparity")
-parser.add_argument("--gpu_index",       type=int, default=0,    help="The index of the gpu to be used; -1 means on cpu")
+parser.add_argument("--test_num",        type=int, default=133,    help="Image number to do inference")
+parser.add_argument("--disp_range",      type=int, default=128,    help="Search range for disparity")
+parser.add_argument("--gpu_index",       type=int, default=0  ,    help="The index of the gpu to be used; -1 means on cpu")
+parser.add_argument("--noc_occ",         type=str, default='noc',  help="ground truth with/out occlusion")
 
 args = parser.parse_args()
 print('----------------------------------------')
@@ -48,11 +49,23 @@ def load_and_resize_l_and_r_image(test_num):
 
     return ll_image, rr_image, ll_image1, rr_image1
 
+def compute_errors(test_num, estimation):    
+    ground_truth = load_disp_img(test_num)
+    
+    error = np.abs(estimation.cpu().numpy()-ground_truth)
+    index = np.where(ground_truth != 0)
+    
+    rmse = np.sqrt(np.sum( (error[index])**2 ))/len(index[0])
+    
+    print('The rmse is:', rmse)
+    
+    
+
 def load_disp_img(test_num):
-    image_path = '%s/disp_%s_0/%06d_10.png' % ('./data_scene_flow/training', 'noc', test_num)
-    reader = png.Reader(image_path)
+    gt_path = os.path.join(args.dataset_dir, 'disp_%s_0/%06d_10.png' % (args.noc_occ, test_num))
+    reader = png.Reader(gt_path)
     pngdata = reader.read()
-    I_image = np.array(map(np.uint16, pngdata[2]))
+    I_image = np.array([i for i in pngdata[2]]).astype(np.uint16)
 
     D_image = I_image / 256.0
 
@@ -148,6 +161,8 @@ max_disp2, pred_2 = torch.max(right_unary_vol, 2)
 pred_disp1 = pred_1.view(unary_vol.size(0), unary_vol.size(1))
 pred_disp2 = pred_2.view(unary_vol.size(0), unary_vol.size(1))
 
+compute_errors(args.test_num,  pred_disp1)
+    
 # Display the images
 plt.figure(figsize=[10,10])
 plt.subplot(411)

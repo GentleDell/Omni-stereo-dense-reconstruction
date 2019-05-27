@@ -5,6 +5,7 @@ Created on Sat Mar  9 12:00:57 2019
 
 @author: zhantao
 """
+import os
 import warnings
 from typing import Optional
 
@@ -94,13 +95,15 @@ class CubicMaps:
         if len(self._cubemap) == 0:
             warnings.warn("No valid cube map!")
         else:
+            file_list = []
             if max(index) > len(self.cubemap):
                 raise ValueError('Input ERROR! Invalid index')
             else:
                 for ind in index:
-                    file_name = path + prefix + '_view' + str(ind)+'.png'
+                    file_name = os.path.join(path, prefix + '_view' + str(ind)+'.png')
                     cv2.imwrite(file_name, 255*np.flip(self.cubemap[ind],axis = 2))
-    
+                    file_list.append(file_name)
+        return file_list
     
     def save_cubedepth(self, path: str = './', prefix: str = '', index: list = [0,1,2,3,4,5], 
                        dist_to_radius: bool = False, camera_para: list = None):
@@ -164,9 +167,9 @@ class CubicMaps:
         if self._omnimage is None:
             warnings.warn("No valid omnidirectional image!")
         if self._omnimage.shape[2] == 3: 
-            cv2.imwrite(path + "omni_image.png", 255*np.flip(self._omnimage,axis = 2))
+            cv2.imwrite( os.path.join(path, "omni_image.png"), 255*np.flip(self._omnimage,axis = 2))
         else: 
-            cv2.imwrite(path + "omni_depthmap.exr", self._omnimage.astype(np.float32))
+            cv2.imwrite( os.path.join(path, "omni_depthmap.exr"), self._omnimage.astype(np.float32))
     
     
     def depth_trans(self, depthmap: np.ndarray=None, camera_parameters: list = None) -> np.ndarray:

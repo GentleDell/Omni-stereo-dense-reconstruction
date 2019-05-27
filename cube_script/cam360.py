@@ -81,7 +81,7 @@ class Cam360:
     def rotation_mtx(self) -> np.array:
         return self._rotation_mtx
 
-    @ property
+    @property
     def translation_vec(self) -> np.array:
         return self._translation_vec
 

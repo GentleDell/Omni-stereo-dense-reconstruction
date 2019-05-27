@@ -6,7 +6,11 @@ Created on Fri Apr  19 18:39:57 2019
 @author: zhantao
 """
 import os
+import sys
 import glob
+import warnings
+import subprocess
+from shutil import copyfile
 from typing import Optional
 
 import cv2
@@ -15,11 +19,12 @@ import matplotlib.pyplot as plt
 
 from cam360 import Cam360
 from cubicmaps import CubicMaps
+from read_model import read_cameras_text
 from scipy.spatial.transform import Rotation
 
 '''
 The below shows the transformations between the world coordinate used in Cam360
-and the local camera coordinates used in the colmap as well as the 6 cubemaps.
+and the local camera coordinates used by colmap as well as the 6 cubemaps.
 
 In the colmap and cubemaps, the local camera coordinate system of an image is 
 defined in the way that the x axis points to the right, the y axis to the bottom 
@@ -36,7 +41,7 @@ view (the top view).
                                             | y_2           
 
 
-                                        [world coorinate]
+                                        [world coordinate]
                  view1:[colmap]             Z                    view3:[colmap] 
                             x_1             |  /Y                     -------- z_3
                             /               | /                      /|
@@ -59,101 +64,311 @@ VIEW_ROT = np.array([[[-1,0,0], [0,0,-1], [0,-1,0]],
                      [[ 1,0,0], [0, 1,0], [0,0, 1]],
                      [[ 1,0,0], [0,-1,0], [0,0,-1]]])
 
+NUM_VIEWS = 6
 
-def create_workspace(image_dir: str='', file_suffix: str='png', work_dir: str='./', 
-                     camera_parameters: list = None, reference_pose: list = None,
-                     resolution: tuple = (256,256)):
+
+def dense_from_cam360list(cam360_list: list, reference_image: int, workspace: str, patchmatch_path: str, views_for_synthesis: int = 4):
     """
-        It projects all omnidirectional images under the given directory to cubic maps. 
-        Then it collects cubic maps according to the view (back/front/laft/right) and 
-        saves diffetent views to the corresponding folders (/work_dir/view0, /work_dir/view1, etc.).
+        Given a list of cam360 objects, it estimates corresponding depthmaps.
+        
+        Firstly, it generates cubic maps for all objects. Then it collects cubic maps 
+        according to the view (back/front/laft/right) and saves diffetent views to
+        corresponding folders (workspace/cubemaps/view0, workspace/cubemaps/view1, etc.).
+        At the same time, it generates the camera models as well as the camera poses and
+        save these data as .txt file to workspace/cubemaps/parameters/view* for patch 
+        matching stereo.
+        
+        After preparation, it calls Patch Matching Stereo GPU to work on cubic maps and 
+        reorganize the estimated depth maps to /workspace/omni_depthmaps/image_name/.
+        
+        Finally, it reproject the cubic depth maps back to the 360 camera to obtain the 
+        omnidirectional depth map.
         
         Parameters
         ----------    
-        image_dir : str
-            Path to the omnidirectional images;
+        cam360_list : list of cam360 objs
+            A list containing cam360 objects;
             
-        file_suffix : str
-            The format of omnidirectional images;
+        reference_image : int
+            Index of the reference cam360 object whose local coordinate will be used as 
+            the world corrdinate in patch matching stereo;
             
-        work_dir :
-            Where to save cubic images;
+        workspace : str
+            Where to save the whole work space;
             
-        camera_parameters: list of list
-            This is a list of list. In each sublist, it contains parameters to be saved, including: [fx, fy, cx, cy].
-            Different sublists represent different cameras. 
+        patchmatch_path: str
+            Where to find the executable patch matching stereo GPU file. 
             
-        reference_pose: list -> [qw, qx, qy, qz, tx, ty, tz ]
-            Quaternion and translation vector.
-            The pose of the center camera (the camera in the center of the camera array).
-            When using several images in a folder to reconstruct a scene, the colmap will locate each image(camera) by their
-            relative poes to the center image(camera). So, to ceate a workspace for colmap, the relative poses are required.
-            Therefore, the pose of the center image(camera) is required to be specified.
-            
-        resolution: tuple
-            The resolution of cube maps.
+        views_for_synthesis: int
+            The number of views (4 or 6) to synthesis the omnidirectional depthmap. 
+            4 means the sky and ground will be neglected.
         
         Examples
         --------
-        >>> create_workspace(image_dir='./image', file_suffix='png', work_dir = './ws', 
-                             camera_parameters=[[267,267,256,256]], reference_pose=[1,0,0,0,0,0,1])
+        >>> dense_from_cam360list(cam360_list = [cam360_1, cam360_2, cam360_3], 
+                                  workspace = './workspace',
+                                  reference_image = 4,  
+                                  patchmatch_path = ./colmap, 
+                                  views_for_synthesis = 4)
     """
     
-    if len(file_suffix) <= 0:
-        raise ValueError("Input ERROR! Invalid file suffix") 
-    for camera in camera_parameters:
-        if camera[2] >= resolution[0] or camera[3] >= resolution[1]:
-            raise ValueError("Input ERROR! Camera center should be around image center!") 
-    # initialize a CubeMaps object
-    cubemap_obj = CubicMaps()
-    # initialize a list of flags to record whether the camera model for the 
-    # 6 cubemaps have been written to the file
-    if camera_parameters:
-        flag_cam_model = [True]*6
+    # create a workspace for patch matching stereo GPU
+    create_workspace_from_cam360_list(cam_list=cam360_list, refimage_index=reference_image, work_dir = workspace)
+        
+    # run patch matching stereo on each cube views
+    print("\n\nExecuting patch match stereo GPU")
+    for view in range(views_for_synthesis):
+        
+        input_path = os.path.join(workspace, "cubemaps/parameters/view" + str(view))
+        output_path= os.path.join(workspace, "patch_match_ws/view" + str(view))
+        image_path = os.path.join(workspace, "cubemaps/view" + str(view))
+        
+        check_path_exist(output_path)
+        
+        command = patchmatch_path +\
+                  " --input_path=" + input_path + \
+                  " --output_path=" + output_path +  \
+                  " --image_path=" + image_path
+        
+        PM = subprocess.Popen(command, shell=True)
+        PM.wait()
+
+    # collect cubemaps belonging to same omnidirectional images
+    print("\n\nReorganizing workspace ...")
+    organize_cubedepth(workspace=workspace)
+
+    # project cubic depth to omnidirectional depthmap
+    print("\n\nReprojecting cubic depth to 360 depth ...")
+    resolution = [cam360_list[0]._height, cam360_list[0]._width]
+    reconstruct_omni_depthmap(omni_workspace=os.path.join(workspace, 'omni_depthmap/*'), view_to_syn=views_for_synthesis, resolution=resolution)
     
-    file_pattern = '*.'+file_suffix
-    image_counter = 0
-    for filename in glob.glob(os.path.join(image_dir, file_pattern)):
-        image_counter += 1
-        prefix = filename.split(sep='/')[-1][:-4]
-        # load omnidirectional images
-        Omni_img = np.flip(cv2.imread(filename), axis=2)   
-        Omni_img = Omni_img/np.max(Omni_img)
-        # create a Cam360 object
-        Omni_obj = Cam360(rotation_mtx = np.eye(3), translation_vec=np.zeros([3,1]), 
-                          height = Omni_img.shape[0], width = Omni_img.shape[1], channels = Omni_img.shape[2], 
-                          texture= Omni_img)
-        # project the omnidirectional image to 6 cubemaps
-        cubemap_obj.sphere2cube(Omni_obj, resolution=resolution)
-        # save the cubemaps
-        for ind in range(len(cubemap_obj.cubemap)):
-            directory = work_dir + '/view' + str(ind) + '/'
-            para_directory = work_dir + '/paramters/view' + str(ind) + '/'
-            # create the directory if not exist
-            if not os.path.exists(directory):
-                os.makedirs(directory)
-            if not os.path.exists(para_directory):
-                os.makedirs(para_directory)
-            # save cubemaps to the folder
-            cubemap_obj.save_cubemap(path = directory, prefix = prefix, index=[ind])
-            # if required to create camera model file 
-            if camera_parameters is not None and flag_cam_model[ind]:
-                # create an empty file to represent 3d sparse models
-                with open(para_directory + 'points3D.txt', "a+") as f: 
-                    f.closed       
-                # write camera model to the given directory
-                create_camera_model(path=para_directory, camera_para = camera_parameters, camera_size=cubemap_obj.cubemap[ind].shape[:2])
-                # suggest the model has been written
-                flag_cam_model[ind] = False
+    return True
+
+
+def check_path_exist(path: str):
+    '''
+        If the given path does not exist, it will create the path.
+    '''
+    if not os.path.exists(path):
+        os.makedirs(path)
+
+
+def show_processbar(num: int, all_steps: int):
+    '''
+        It will draw a process bar.
+    '''
+    sys.stdout.write('\r')
+    sys.stdout.write('Creating workspace: ')
+    sys.stdout.write("[%-20s] %d%%" % ('='*round(num*20/all_steps), 100*(num)/all_steps))
+    sys.stdout.flush()
+
+
+def create_workspace_from_cam360_list( cam_list: list, refimage_index: int = -1, cubemap_resolution: tuple = None, 
+                                       work_dir: str = './workspace'):
+    """
+        Given a list of cam360 objects, it decomposes these cam360 objs and creates a 
+        workspace for patch match stereo GPU.
+        
+        Firstly, it generates cubic maps for all objects. Then it collects cubic maps 
+        according to the view (back/front/laft/right) and saves diffetent views to
+        corresponding folders (workspace/cubemaps/view0, workspace/cubemaps/view1, etc.).
+        At the same time, it generates the camera models as well as the camera poses and
+        save these data as .txt file to workspace/cubemaps/parameters/view* for patch 
+        matching stereo.
+
+        Parameters
+        ----------    
+        cam_list : list of cam360 objs
+            A list containing cam360 objects;
             
-            if reference_pose is not None:
-                if len(reference_pose) == 7:
-                    create_imagedb( path=para_directory, name_list = [ prefix + '_view' + str(ind) + '.' + file_suffix], 
-                                    camera_id = 1, ref_pose=np.array(reference_pose), view_ind = ind, image_id = image_counter)
-                else:
-                    raise ValueError('Input ERROR! Invalid reference pose, it should be a quaternion followed by a translation')
-                    
-                        
+        refimage_index : int
+            Index of the reference cam360 object whose local coordinate will be used as 
+            the world corrdinate in patch matching stereo;
+        
+        cubemap_resolution: tuple
+            The resolution of cubic maps.
+        
+        work_dir : str
+            Where to save the whole work space;
+        
+        Examples
+        --------
+        >>> create_workspace_from_cam360_list(cam_list=[cam360_1, cam360_2, cam360_3], 
+                                              refimage_index=4, 
+                                              work_dir = './workspace')
+    """
+    # verify inputs
+    if len(cam_list) < 2:
+        raise ValueError("Image is not enough to reconstruct depthmap")
+    if refimage_index < 0:
+        raise ValueError("Invalid index to reference image")    
+    
+    try:  # get the pose of the reference image
+        rotation_ref    = cam_list[refimage_index].rotation_mtx
+        translation_ref = cam_list[refimage_index].translation_vec
+        reference_pose  = [rotation_ref, translation_ref] 
+    except:
+        raise ValueError("The reference camera360 doesn't have valid pose")    
+
+    camera_txt_flag = True # whether to writh camera model .txt
+    for ind, omni_cam in enumerate(cam_list):
+        # ckeck the textures
+        if omni_cam.texture is None:
+            if ind == refimage_index:
+                raise ValueError("The reference camera360 doesn't have texture")
+            else:   
+                warnings.warn("The {:d}th camera360 doesn't have valid textures; it will be skipped".format(ind))
+                continue            
+        else:
+            # decompose omnidirectional image into 6 cubic maps and save them
+            decompose_and_save(omni_cam, reference_pose, cubemap_resolution, work_dir, 
+                               prefix="cam360", image_index = ind + 1, camera_txt_flag = camera_txt_flag)
+            camera_txt_flag = False # only write once
+            # present the process
+            show_processbar(ind+1, len(cam_list))
+
+
+def decompose_and_save(cam: Cam360, reference_pose: list, resolution: tuple = None, work_dir: str = "./workspace",
+                        prefix: str = "cam360_cubemap",  image_index:int = 0,  camera_txt_flag: bool = True):
+    """
+        Given a cam360 objects, it decomposes the cam360 objs into 6 cubic maps
+        and save them according to the view (back -> view0, front - view1 etc.).
+        At the same time, it generates camera models as well as camera poses and
+        save these data as .txt file to workspace/cubemaps/parameters/view*. 
+        
+        Parameters
+        ----------    
+        cam : cam360 objs
+            A list containing cam360 objects;
+            
+        reference_pose : list
+            Pose of the reference image. [[rotation matrix], [translation]]
+        
+        resolution: tuple
+            The resolution of cubic maps.
+        
+        work_dir : str
+            Where to save the whole work space;
+        
+        Examples
+        --------
+        >>> create_workspace_from_cam360_list(cam_list=[cam360_1, cam360_2, cam360_3], 
+                                              refimage_index=4, 
+                                              work_dir = './workspace')
+    """    
+    if resolution is None:
+        resolution = (cam._height, cam._height)
+    
+    if cam.texture is None:
+        raise ValueError("The given camera360 object doesn't have texture")
+    
+    else:
+        prefix = prefix + "_{:d}".format(image_index)
+        
+        cubemap_obj = CubicMaps()
+        cubemap_obj.sphere2cube(cam, resolution=resolution)
+        
+        for ind in range(NUM_VIEWS):
+            
+            camera_poes = [cam.rotation_mtx, cam.translation_vec]
+            camera_parameters = [resolution[0]/2, resolution[1]/2, resolution[0]/2, resolution[1]/2]
+            
+            view_folder = os.path.join(work_dir, 'cubemaps/view' + str(ind))
+            para_folder = os.path.join(work_dir, 'cubemaps/parameters/view' + str(ind))
+            check_path_exist(view_folder)
+            check_path_exist(para_folder)
+            
+            image_path = cubemap_obj.save_cubemap(path = view_folder, prefix = prefix, index=[ind])   
+            image_name = image_path[0].split('/')[-1]
+        
+        # TODO: support images taken by different camera models
+        
+            if camera_txt_flag:
+                camera_id = create_camera_model(path=para_folder, camera_para = [camera_parameters], camera_size=resolution)
+                save_3d_points(para_folder)
+            else:
+                camera_id = 1
+            
+            pose_colmap = convert_coordinate(source_pose = camera_poes, reference_pose=reference_pose, index_of_cubemap=ind)
+            save_pose(para_folder, pose_colmap, image_index, image_name, camera_id)
+
+
+def convert_coordinate(source_pose: list, reference_pose: list, index_of_cubemap: int):
+    '''
+        It computes the rotation and translation from the reference cube map to 
+        the source cube map.
+        
+        Parameters
+        ----------    
+        source_pose : list
+            The pose of the souorce image. camera -> world
+            
+        reference_pose : list
+            The pose of the reference image. camera -> world
+        
+        index_of_cubemap : int
+            Which cube map is uesd. 
+        
+    '''
+    tocolmap = VIEW_ROT[index_of_cubemap,:,:]
+    
+    rotation_ref = reference_pose[0]
+    translation_ref = reference_pose[1]
+    rotation_source = source_pose[0]
+    translation_source = source_pose[1]
+   
+    # convert the poses of images from camera->world (in general) to reference->source (colmap)
+    delta_rot = rotation_source.transpose().dot(rotation_ref.dot(tocolmap.transpose()))
+    quat_rot  = Rotation.from_dcm(tocolmap.dot(delta_rot)).as_quat()   
+    
+    quat_rot_colmap = [tmp for tmp in quat_rot[0:3]]
+    quat_rot_colmap.insert(0, quat_rot[3])
+    translation = tocolmap.dot( rotation_source.transpose().dot(translation_ref - translation_source) ) 
+    
+    return [quat_rot_colmap, translation]
+
+
+def save_pose(para_folder: str, poses: list, image_index: int, image_name: str, camera_id: int):
+    '''
+        It saves the given poses to the given folder.
+        
+        Parameters
+        ----------    
+        para_folder: str
+            Where to save the parameters
+         
+        poses: list
+            [[rotation matrix], [translation vector]]
+        
+        image_index: int 
+            The index of the image which has the given poses
+            
+        image_name: str
+            The name of the image which has the given poses
+            
+        camera_id: int
+            The index of the camera model coresponding to the image 
+    '''
+    
+    # record image id, pose, camera id as well the image name to the images.txt in colmap format
+    with open(os.path.join(para_folder, 'images.txt'), "a+") as f:
+        f.write(str(image_index))
+        for quat in poses[0]:
+            f.write( ' ' + str(quat))
+        for trans in poses[1]:
+            f.write( ' ' + str(trans))
+        f.write( ' ' + str(camera_id) + ' ' + image_name)
+        f.write('\n\n')
+        f.close()    
+
+
+def save_3d_points(path: str):
+    '''
+        It creates an empty point3D.txt file at the given path.
+    '''
+    with open(os.path.join(path, 'points3D.txt'), "a+") as f: 
+        f.closed
+        
 
 def create_depth_workspace(image_dir: str='', file_suffix: str='exr', work_dir: str='./',
                            radius_depth: Optional[bool] = False, cam_para: Optional[list] = None,
@@ -224,6 +439,7 @@ def create_depth_workspace(image_dir: str='', file_suffix: str='exr', work_dir: 
             else:
                 cubemap_obj.save_cubedepth(path = directory, prefix = prefix, index=[ind])
                     
+                
 def create_camera_model( path: str = './', camera_para: list = None, camera_size: tuple = None):
     """
         It creates a file containing several camera models for colmap.
@@ -243,11 +459,10 @@ def create_camera_model( path: str = './', camera_para: list = None, camera_size
         Return:
         --------
         A .txt file containing camera parameters. Following is an example:
-            # Camera list with one line of data per camera:
-            #   CAMERA_ID, MODEL, WIDTH, HEIGHT, PARAMS[]
-            # Number of cameras: 2
-            1 PINHOLE 512 512 358.29301602 358.29301602 256 256
+            1 PINHOLE 512 512 358.29301602 358.29301602 256 256 \n
             2 PINHOLE 512 512 267.29301602 267.29301602 256 256
+            
+        Return the number of existing cameras models
         
         Examples
         --------
@@ -258,140 +473,94 @@ def create_camera_model( path: str = './', camera_para: list = None, camera_size
     elif len(camera_size) != 2:
         raise ValueError("Input ERROR! Invalid image size")
     else:
-        helper = '# Camera list with one line of data per camera: \n#   CAMERA_ID, MODEL, WIDTH, HEIGHT, PARAMS[] \n# Number of cameras: 1 \n'     
-        with open(path + 'cameras.txt', "a+") as f:   # Opens file and casts as f 
+        camera_file = os.path.join(path, 'cameras.txt')
+        
+        helper = '# Camera list with one line of data per camera: \n#   CAMERA_ID, MODEL, WIDTH, HEIGHT, PARAMS[] \n# Number of cameras: 1 \n' 
+        
+        try:
+            previous_camera = len(read_cameras_text(camera_file))
+        except:
+            previous_camera = 0
+        
+        with open( camera_file, "a+") as f:   # Opens file and casts as f 
             f.write(helper)
             for camera_id in range(len(camera_para)):
                 # Writing
-                f.write(str(camera_id+1) + ' PINHOLE ' + str(camera_size[0]) + ' ' + str(camera_size[1]))
+                f.write(str(camera_id + 1 + previous_camera) + ' PINHOLE ' + str(camera_size[0]) + ' ' + str(camera_size[1]))
                 for para in camera_para[camera_id]:
                     f.write( ' ' + str(para))
                 f.write('\n')
                 f.close()         # Close file
-        
-        
-def create_imagedb(path: str = './', name_list: list = None, 
-                   camera_id: int = None, ref_pose: np.array = None, 
-                   view_ind: int = None, image_id:int = None):
+
+    return camera_id + 1 + previous_camera
+
+
+def organize_cubedepth(workspace: str):
     '''
-        It parses images' (cameras') poses from images' names and then creates an image database for colmap.
+        For each omnidirectional image, it copies the corresponding cubic depth maps
+        to: /workspace/omni_depthmap/image_name
         
         Parameters
         ----------    
-        path: str
-            Path to save the file;
-            
-        name_list: list
-            A list of images names;
-            
-        camera_id: int
-            The camera id of the camera that captures these images given in the name_list;
-            
-        ref_pose: np.array
-            The pose of the camera that capturing the center image.
-            
-        view_ind: int 
-            The index of the current view: [ 0th:  back  |  1st:  left  |  2nd:  front  |  3rd:  right  |  4th:  top  |  5th:  bottom ]
-            Different views have different rotation matrices.  
-            
-        image_id: int
-            Used as the image_id in the image database.     
-        
-        Return:
-        --------
-        A .txt file containing an image database. The following is an example:
-            # Image list with two lines of data per image:\n
-            #   IMAGE_ID, QW, QX, QY, QZ, TX, TY, TZ, CAMERA_ID, NAME\n
-            #   POINTS2D[] as (X, Y, POINT3D_ID)\n
-            # Number of images: 1\n
-            1 1 0 0 0 4 -1 0 1 view3l.png
+        workspace: str
+            The path to the workspace.
     '''
+    depth_path = os.path.join(workspace, 'patch_match_ws')
+    dst_folder = os.path.join(workspace, 'omni_depthmap')
     
-    if name_list is None or camera_id is None or ref_pose is None:
-        raise ValueError("Input ERROR! One or more parameters are not provided") 
-    elif len(ref_pose) != 7:
-        raise ValueError("Input ERROR! Invalid reference pose")
-    else:
-        with open(path + 'images.txt', "a+") as f:
-            for ind, image_name in enumerate(name_list):
-                # parse the image names to poses
-                rotation, translation = pose_from_name(image_name, ref_pose, view_ind)
-                # record image id, pose, camera id as well the image name to the images.txt
-                # in the colmap format
-                f.write(str(image_id + ind))
-                for quant in rotation:
-                    f.write( ' ' + str(quant))
-                for trans in translation:
-                    f.write( ' ' + str(trans))
-                f.write( ' ' + str(camera_id) + ' ' + image_name)
-                f.write('\n\n')
-                # Close file
-                f.close()                                  
+    check_path_exist(dst_folder)
     
+    for image in sorted(glob.glob( os.path.join(depth_path, 'view0/stereo/depth_maps/*.geometric.bin' ))):
+        
+        image_name = image.split('/')[-1].split('.')[0][:-6]
+        
+        for depth_view in sorted(glob.glob( os.path.join(depth_path, 'view*') )):
+            view_num = depth_view.split('/')[-1]
+            depth_file = glob.glob( os.path.join(depth_path, view_num+'/stereo/depth_maps/{:s}*.geometric.bin'.format(image_name)) )[0]
+            
+            dst_path = os.path.join(dst_folder,'{:s}'.format(image_name)) 
+            check_path_exist(dst_path)
+            
+            copyfile(depth_file, os.path.join(dst_path, '{:s}_{:s}.geometric.bin'.format( image_name, view_num)))        
 
-def pose_from_name(name:str, ref_pose: np.array, view_index: int):
+
+def reconstruct_omni_depthmap(omni_workspace: str, Camera_parameter: list = None, 
+                              view_to_syn: int = 6, resolution: list = None, save_omni: bool = True):
     '''
-        It parses the pose of an image/camera according to the image's name.
-        
+        It projects depth maps to omnidirectional depth map.
         Parameters
         ----------    
-        name:str
-            The name of the images;
-            
-        ref_pose: np.array
-            The pose of the camera that capturing the center image; also called 'the pose of the reference image';
-            
-        view_ind: int 
-            The index of the current view: [ 0th:  back  |  1st:  left  |  2nd:  front  |  3rd:  right  |  4th:  top  |  5th:  bottom ]
-            Different views have different rotation matrices.  
+        omni_workspace: str
+            The path to the /workspace/omni_depthmap
         
-        Return:
-        --------
-        quat_final: list
-            The quaternion vector;
-        
-        translation: nd.array
-            The translation vector
+        Camera_parameter: list
+            Camera paraeters to be used for projection
+            
+        view_to_syn: int
+            The number of views (4 or 6) to synthesis the omnidirectional depthmap. 
+            4 means the sky and ground will be neglected.
+            
+        resolution: list
+            The resolution of ouput depth map.
+            
+        save_omni: bool
+            Whether to save the omnidirectional depth map.
+            
     '''
-    try:
-        tocolmap = VIEW_ROT[view_index,:,:]
-        
-    # parse the image name to the corresponding pose
-        words = name.split(sep='_')
-        # if each image has it own rotation, then we need to parse the rotation here 
-        rot_img =  Rotation.from_dcm(np.eye(3))
-        trans_img = words[1:4]
-        trans_img = np.array([int(trans) for trans in trans_img])
-        
-    # convert the pose of the reference image
-        trans_ref = np.array(ref_pose[4:])
-        # here scipy.transformation.Rotation uses [x,y,z,w] but colmap uses [w,x,y,z], 
-        # so we convert the quaternion vector.
-        quat_ref = [a for a in ref_pose[1:4]]
-        quat_ref.append(ref_pose[0])
-        rot_ref = Rotation(quat_ref)
-        
-    # compute the pose of the given image related to the reference image
-        delta_rot = rot_ref.__mul__(rot_img.inv())
-        rotation = Rotation.from_euler('xyz',tocolmap.dot(delta_rot.as_euler('xyz'))).as_quat()
-        translation = tocolmap.dot( rot_ref.inv().as_dcm().dot(trans_ref - trans_img) ) 
-              
-    except:
-        raise ValueError('Input ERROR! Can not parse the given filename to poses')
-    
-    # convert the quaternion vector to the colmap format
-    quat_final = [a for a in rotation[0:3]]
-    quat_final.insert(0, rotation[3])
-    
-    return quat_final, translation
+    for folder in sorted( glob.glob( omni_workspace )):
+        file_name = folder.split('/')[-1]
+        project_colmap_depth(path = folder,
+                             view_name = file_name,
+                             views_list = [num for num in range(view_to_syn)],
+                             output_resolution=resolution, 
+                             use_radial_dist=True, 
+                             camera_para=Camera_parameter,
+                             save=save_omni)
 
 
-def project_colmap_depth(path: str, view_name: str = None,
-                         views_list: list = [],
-                         output_resolution: tuple=None, 
-                         use_radial_dist: bool = False,
-                         camera_para: list=None, 
-                         save: bool = True) -> np.array:
+def project_colmap_depth(path: str, view_name: str = None, views_list: list = [],
+                         output_resolution: tuple=None, use_radial_dist: bool = False,
+                         camera_para: list=None, save: bool = True) -> np.array:
     '''
         It loads 6 or 4 cubemaps from the given path and merge them to a omnidirectional depth map.
         
@@ -425,13 +594,9 @@ def project_colmap_depth(path: str, view_name: str = None,
         
         Example:
         --------
-        >>> estimated = project_colmap_depth(path = path_to_dmap, 
-                                 view_name = name_pattern,
-                                 views_list = [0,1,2,3],
-                                 output_resolution=(512, 1024), 
-                                 use_radial_dist=True, 
-                                 camera_para=[267,267,256,256],
-                                 save=False)
+        >>> estimated = project_colmap_depth(path = path_to_dmap, view_name = name_pattern,
+                                 views_list = [0,1,2,3], output_resolution=(512, 1024), 
+                                 use_radial_dist=True,  camera_para=[256,256,256,256], save=False)
     '''
     if len(views_list) <= 0:
         raise ValueError("Input ERROR! Please specify the views to be loaded.")
@@ -440,24 +605,24 @@ def project_colmap_depth(path: str, view_name: str = None,
     else:
         path_to_file = []
         for ind in views_list:
-            path_to_file.append(path + '/view' + str(ind) + '/' + view_name + '_view' + str(ind) + '.*')
+            path_to_file.append( os.path.join(path, view_name + '_view' + str(ind) + '.*'))
     
     cubemap = CubicMaps()
     cubemap.load_depthmap(path_to_file=path_to_file)
     
     if use_radial_dist:
         if camera_para is None:
-            raise ValueError("ERROR during merging cubic depthmaps. Radial distances are required but camera parameters are not given.")
+            camera_para = [ cubemap.depthmap[0].shape[0]/2 ] * 4 
         elif len(camera_para) != 4:
             raise ValueError("Inpute ERROR. Camera parameters should have 4 parameters:[fx, fy, cx, cy].")
-        else:
-            for ind in range(len(path_to_file)):
-                cubemap.depthmap[ind] = cubemap.depth_trans(cubemap.depthmap[ind], camera_para)
+        
+        for ind in range(len(path_to_file)):
+            cubemap.depthmap[ind] = cubemap.depth_trans(cubemap.depthmap[ind], camera_para)
     
     cubemap.cube2sphere_fast(resolution = output_resolution)
     
     if save:
-        cubemap.save_omnimage()
+        cubemap.save_omnimage(path=path)
     
     return cubemap.omnimage
     
