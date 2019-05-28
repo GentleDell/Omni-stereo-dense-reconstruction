@@ -6,6 +6,7 @@ Created on Fri Apr  19 18:39:57 2019
 @author: zhantao
 """
 import os
+import re
 import sys
 import glob
 import warnings
@@ -136,6 +137,10 @@ def dense_from_cam360list(cam360_list: list   , reference_image: int      , work
             CM = subprocess.Popen(command, shell=True)
             CM.wait()
             
+            # modify the patch-match.cfg file to set number of source image or 
+            # specify the images to be used
+            set_patchmatch_cfg(output_path)
+            
             command = patchmatch_path + \
                       " patch_match_stereo" + \
                       " --workspace_path="  + output_path + \
@@ -164,6 +169,17 @@ def dense_from_cam360list(cam360_list: list   , reference_image: int      , work
     return True
 
 
+def set_patchmatch_cfg(workspace: str):
+    pattern = '__auto__.*'
+    rep_txt = '__all__' 
+    with open(os.path.join(workspace, 'stereo/patch-match.cfg'), 'r') as file:
+        config = file.read()
+    
+    config = re.sub(pattern, rep_txt, config)
+    
+    with open(os.path.join(workspace, 'stereo/patch-match.cfg'), 'w') as file:
+        file.write(config)
+        
 def check_path_exist(path: str):
     '''
         If the given path does not exist, it will create the path.
