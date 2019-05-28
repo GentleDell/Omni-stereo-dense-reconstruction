@@ -13,7 +13,7 @@ from torchvision import transforms
 from src.nets_test import Net
 
 parser = argparse.ArgumentParser()
-parser.add_argument("--dataset_dir",     type=str, default='../../../dataset/kitti_sceneflow/training/', help="where the dataset is stored")
+parser.add_argument("--dataset_dir",     type=str, default='../../../dataset/kitti_sceneflow/train/', help="where the dataset is stored")
 parser.add_argument("--save_root",       type=str, default='./dataset',     help="Where to dump the data")
 parser.add_argument("--checkpoint_dir",  type=str, default='./checkpoints', help="Where the ckpt files are")
 parser.add_argument("--checkpoint_file", type=str, default='edlsm_latest49999.ckpt', help="checkpoint file name to load")

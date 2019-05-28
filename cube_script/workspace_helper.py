@@ -67,7 +67,8 @@ VIEW_ROT = np.array([[[-1,0,0], [0,0,-1], [0,-1,0]],
 NUM_VIEWS = 6
 
 
-def dense_from_cam360list(cam360_list: list, reference_image: int, workspace: str, patchmatch_path: str, views_for_synthesis: int = 4):
+def dense_from_cam360list(cam360_list: list   , reference_image: int      , workspace: str, 
+                          patchmatch_path: str, views_for_synthesis: int=4, use_colmap: bool=False):
     """
         Given a list of cam360 objects, it estimates corresponding depthmaps.
         
@@ -109,7 +110,8 @@ def dense_from_cam360list(cam360_list: list, reference_image: int, workspace: st
                                   workspace = './workspace',
                                   reference_image = 4,  
                                   patchmatch_path = ./colmap, 
-                                  views_for_synthesis = 4)
+                                  views_for_synthesis = 4,
+                                  use_colmap = True)
     """
     
     # create a workspace for patch matching stereo GPU
@@ -125,13 +127,30 @@ def dense_from_cam360list(cam360_list: list, reference_image: int, workspace: st
         
         check_path_exist(output_path)
         
-        command = patchmatch_path +\
-                  " --input_path=" + input_path + \
-                  " --output_path=" + output_path +  \
-                  " --image_path=" + image_path
-        
-        PM = subprocess.Popen(command, shell=True)
-        PM.wait()
+        if use_colmap:
+            command = patchmatch_path + \
+                      " image_undistorter" + \
+                      " --image_path="  + image_path + \
+                      " --input_path="  + input_path + \
+                      " --output_path=" + output_path
+            CM = subprocess.Popen(command, shell=True)
+            CM.wait()
+            
+            command = patchmatch_path + \
+                      " patch_match_stereo" + \
+                      " --workspace_path="  + output_path + \
+                      " --PatchMatchStereo.depth_min=10"  + \
+                      " --PatchMatchStereo.depth_max=500"
+            CM = subprocess.Popen(command, shell=True)
+            CM.wait()
+            
+        else:
+            command = patchmatch_path +\
+                      " --input_path=" + input_path   + \
+                      " --output_path=" + output_path + \
+                      " --image_path=" + image_path
+            PM = subprocess.Popen(command, shell=True)
+            PM.wait()
 
     # collect cubemaps belonging to same omnidirectional images
     print("\n\nReorganizing workspace ...")

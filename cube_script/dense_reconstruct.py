@@ -21,7 +21,8 @@ parser.add_argument("--patchmatch_path",  type=str, default='./colmap', help="Wh
 parser.add_argument("--workspace"      ,  type=str, default='../workspace',  help="Where to store the workspace") 
 parser.add_argument("--reference_image",  type=int, default=4,  help="Which image is the used as the reference image to create the world coordinate")
 parser.add_argument("--views_for_synthesis",  type=int, default=4,  help="The number of views to synthesize the 360 depthmap; only 4 and 6 are supported") 
-parser.add_argument("--pose_list",  nargs='+', default=['4'],  help="The number of views to synthesize the 360 depthmap") 
+parser.add_argument("--use_colmap",  type=bool, default=False,  help="Use orignal colmap or the modified PatchMatchingStereoGPU adapted from colmap") 
+parser.add_argument("--pose_list" ,  nargs='+', default=['4'],  help="The number of views to synthesize the 360 depthmap") 
 
 
 def main():
@@ -70,7 +71,8 @@ def main():
                           workspace = args.workspace,
                           reference_image = args.reference_image,  
                           patchmatch_path = args.patchmatch_path, 
-                          views_for_synthesis = args.views_for_synthesis)
+                          views_for_synthesis = args.views_for_synthesis,
+                          use_colmap = args.use_colmap)
 
 
 if __name__ == '__main__':
