@@ -317,7 +317,7 @@ def decompose_and_save(cam: Cam360, ref_cam: Cam360, resolution: tuple=None, wor
         cubemap_obj.sphere2cube(cam, resolution=resolution)
         
         prefix = prefix + "_{:d}".format(image_index)
-        new_angel = None
+        new_angle = None
         for ind in range(NUM_VIEWS):
                        
             view_folder = os.path.join(work_dir, 'cubemaps/view' + str(ind))
@@ -329,7 +329,7 @@ def decompose_and_save(cam: Cam360, ref_cam: Cam360, resolution: tuple=None, wor
                 intial_z = cam.rotation_mtx.transpose().dot(reference_pose[0].dot( VIEW_ROT[ind].transpose() )).dot(np.array([0,0,1]))
                 intial_z = np.expand_dims(intial_z, axis=1)
                 initial_pose = eu2pol(intial_z[0], intial_z[1], intial_z[2])
-                cubemap_obj.cubemap[ind], new_angel = view_selection(cam, 
+                cubemap_obj.cubemap[ind], new_angle = view_selection(cam, 
                                                                      reference_cube[ind], 
                                                                      initial_pose=(np.abs(initial_pose[1]), np.abs(initial_pose[0])))
             
@@ -346,11 +346,11 @@ def decompose_and_save(cam: Cam360, ref_cam: Cam360, resolution: tuple=None, wor
                 camera_id = 1
             
             source_pose = [cam.rotation_mtx, cam.translation_vec]
-            pose_colmap = convert_coordinate(source_pose, reference_pose, index_of_cubemap=ind, new_angel = new_angel)
+            pose_colmap = convert_coordinate(source_pose, reference_pose, index_of_cubemap=ind, new_angle = new_angle)
             save_pose(para_folder, pose_colmap, image_index, image_name, camera_id)
 
 
-def convert_coordinate(source_pose: list, reference_pose: list, index_of_cubemap: int, new_angel: tuple=None):
+def convert_coordinate(source_pose: list, reference_pose: list, index_of_cubemap: int, new_angle: tuple=None):
     '''
         It computes the rotation and translation from the reference cube map to 
         the source cube map.
@@ -366,7 +366,7 @@ def convert_coordinate(source_pose: list, reference_pose: list, index_of_cubemap
         index_of_cubemap : int
             Which cube map is uesd.
         
-        new_angel: tuple
+        new_angle: tuple
             [phi, theta], the angle of the new view
         
     '''
@@ -379,14 +379,14 @@ def convert_coordinate(source_pose: list, reference_pose: list, index_of_cubemap
     rotation_source = source_pose[0]
     translation_source = source_pose[1]
    
-    if new_angel is not None:
+    if new_angle is not None:
         # mediate view    
-        if new_angel[0] == 0:
-            med_view2colmap = Rotation.from_euler('x', new_angel[1]).as_euler('zyx')[0]
-        elif new_angel[1] == 0:
-            med_view2colmap = Rotation.from_euler('z', new_angel[0]).as_euler('zyx')[0]
+        if new_angle[0] == 0:
+            med_view2colmap = Rotation.from_euler('x', new_angle[1]).as_euler('zyx')[0]
+        elif new_angle[1] == 0:
+            med_view2colmap = Rotation.from_euler('z', new_angle[0]).as_euler('zyx')[0]
         else:
-            med_view2colmap = Rotation.from_euler('zx', [new_angel[0], new_angel[1]]).as_euler('zyx')
+            med_view2colmap = Rotation.from_euler('zx', [new_angle[0], new_angle[1]]).as_euler('zyx')
             
         new_view2colmap = med_view2colmap + np.array([np.pi, 0, 0])
         src_tocolmap = Rotation.from_euler('zyx', new_view2colmap).as_dcm()
