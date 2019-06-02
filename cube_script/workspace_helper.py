@@ -19,8 +19,10 @@ import numpy as np
 import matplotlib.pyplot as plt
 
 from cam360 import Cam360
+from spherelib import eu2pol
 from cubicmaps import CubicMaps
 from read_model import read_cameras_text
+from view_selection import view_selection
 from scipy.spatial.transform import Rotation
 
 '''
@@ -68,8 +70,8 @@ VIEW_ROT = np.array([[[-1,0,0], [0,0,-1], [0,-1,0]],
 NUM_VIEWS = 6
 
 
-def dense_from_cam360list(cam360_list: list   , reference_image: int      , workspace: str, 
-                          patchmatch_path: str, views_for_synthesis: int=4, use_colmap: bool=False):
+def dense_from_cam360list(cam360_list: list, reference_image: int, workspace: str, patchmatch_path: str, 
+                          views_for_synthesis: int=4, use_colmap: bool=False, use_view_selection: bool=False):
     """
         Given a list of cam360 objects, it estimates corresponding depthmaps.
         
@@ -116,7 +118,8 @@ def dense_from_cam360list(cam360_list: list   , reference_image: int      , work
     """
     
     # create a workspace for patch matching stereo GPU
-    create_workspace_from_cam360_list(cam_list=cam360_list, refimage_index=reference_image, work_dir = workspace)
+    create_workspace_from_cam360_list(cam_list=cam360_list, refimage_index=reference_image, 
+                                      work_dir = workspace, view_selection=use_view_selection)
         
     # run patch matching stereo on each cube views
     print("\n\nExecuting patch match stereo GPU")
@@ -199,7 +202,7 @@ def show_processbar(num: int, all_steps: int):
 
 
 def create_workspace_from_cam360_list( cam_list: list, refimage_index: int = -1, cubemap_resolution: tuple = None, 
-                                       work_dir: str = './workspace'):
+                                       work_dir: str = './workspace', view_selection: bool = False):
     """
         Given a list of cam360 objects, it decomposes these cam360 objs and creates a 
         workspace for patch match stereo GPU.
@@ -218,13 +221,16 @@ def create_workspace_from_cam360_list( cam_list: list, refimage_index: int = -1,
             
         refimage_index : int
             Index of the reference cam360 object whose local coordinate will be used as 
-            the world corrdinate in patch matching stereo;
+            the world corrdinate in patch matching stereo; start from 0;
         
         cubemap_resolution: tuple
             The resolution of cubic maps.
         
         work_dir : str
             Where to save the whole work space;
+            
+        view_selection : bool
+            whether to select views for dense reconstruction;
         
         Examples
         --------
@@ -238,33 +244,31 @@ def create_workspace_from_cam360_list( cam_list: list, refimage_index: int = -1,
     if refimage_index < 0:
         raise ValueError("Invalid index to reference image")    
     
-    try:  # get the pose of the reference image
-        rotation_ref    = cam_list[refimage_index].rotation_mtx
-        translation_ref = cam_list[refimage_index].translation_vec
-        reference_pose  = [rotation_ref, translation_ref] 
-    except:
-        raise ValueError("The reference camera360 doesn't have valid pose")    
+    ref_cam = cam_list[refimage_index]   
 
     camera_txt_flag = True # whether to writh camera model .txt
-    for ind, omni_cam in enumerate(cam_list):
+    for ind, src_cam in enumerate(cam_list):
         # ckeck the textures
-        if omni_cam.texture is None:
+        if src_cam.texture is None:
             if ind == refimage_index:
                 raise ValueError("The reference camera360 doesn't have texture")
             else:   
                 warnings.warn("The {:d}th camera360 doesn't have valid textures; it will be skipped".format(ind))
                 continue            
         else:
+            enable_view_selection = (ind!=refimage_index) and view_selection
+            
             # decompose omnidirectional image into 6 cubic maps and save them
-            decompose_and_save(omni_cam, reference_pose, cubemap_resolution, work_dir, 
-                               prefix="cam360", image_index = ind + 1, camera_txt_flag = camera_txt_flag)
+            decompose_and_save(src_cam, ref_cam, cubemap_resolution, work_dir, prefix="cam360", 
+                               image_index = ind + 1, camera_txt_flag=camera_txt_flag, select_view=enable_view_selection)
+                
             camera_txt_flag = False # only write once
             # present the process
             show_processbar(ind+1, len(cam_list))
 
 
-def decompose_and_save(cam: Cam360, reference_pose: list, resolution: tuple = None, work_dir: str = "./workspace",
-                        prefix: str = "cam360_cubemap",  image_index:int = 0,  camera_txt_flag: bool = True):
+def decompose_and_save(cam: Cam360, ref_cam: Cam360, resolution: tuple=None, work_dir: str="./workspace",
+                        prefix: str="cam360_cubemap",  image_index:int=0,  camera_txt_flag: bool=True, select_view: bool=False):
     """
         Given a cam360 objects, it decomposes the cam360 objs into 6 cubic maps
         and save them according to the view (back -> view0, front - view1 etc.).
@@ -274,16 +278,19 @@ def decompose_and_save(cam: Cam360, reference_pose: list, resolution: tuple = No
         Parameters
         ----------    
         cam : cam360 objs
-            A list containing cam360 objects;
+            A source cam360 objects;
             
-        reference_pose : list
-            Pose of the reference image. [[rotation matrix], [translation]]
+        ref_cam : cam360 objs
+            The reference cam360 object;
         
         resolution: tuple
             The resolution of cubic maps.
         
         work_dir : str
             Where to save the whole work space;
+            
+        select_view : bool
+            whether to select views for dense reconstruction;
         
         Examples
         --------
@@ -298,37 +305,52 @@ def decompose_and_save(cam: Cam360, reference_pose: list, resolution: tuple = No
         raise ValueError("The given camera360 object doesn't have texture")
     
     else:
-        prefix = prefix + "_{:d}".format(image_index)
         
         cubemap_obj = CubicMaps()
+        
+        try:  # get the pose of the reference image
+            reference_pose = [ref_cam.rotation_mtx, ref_cam.translation_vec]
+            reference_cube = cubemap_obj.sphere2cube(ref_cam, resolution=resolution)
+        except:
+            raise ValueError("The reference camera360 doesn't have valid pose") 
+        
         cubemap_obj.sphere2cube(cam, resolution=resolution)
         
+        prefix = prefix + "_{:d}".format(image_index)
+        new_angel = None
         for ind in range(NUM_VIEWS):
-            
-            camera_poes = [cam.rotation_mtx, cam.translation_vec]
-            camera_parameters = [resolution[0]/2, resolution[1]/2, resolution[0]/2, resolution[1]/2]
-            
+                       
             view_folder = os.path.join(work_dir, 'cubemaps/view' + str(ind))
             para_folder = os.path.join(work_dir, 'cubemaps/parameters/view' + str(ind))
             check_path_exist(view_folder)
             check_path_exist(para_folder)
+            
+            if select_view:
+                intial_z = cam.rotation_mtx.transpose().dot(reference_pose[0].dot( VIEW_ROT[ind].transpose() )).dot(np.array([0,0,1]))
+                intial_z = np.expand_dims(intial_z, axis=1)
+                initial_pose = eu2pol(intial_z[0], intial_z[1], intial_z[2])
+                cubemap_obj.cubemap[ind], new_angel = view_selection(cam, 
+                                                                     reference_cube[ind], 
+                                                                     initial_pose=(np.abs(initial_pose[1]), np.abs(initial_pose[0])))
             
             image_path = cubemap_obj.save_cubemap(path = view_folder, prefix = prefix, index=[ind])   
             image_name = image_path[0].split('/')[-1]
         
         # TODO: support images taken by different camera models
         
+            camera_parameters = [resolution[0]/2, resolution[1]/2, resolution[0]/2, resolution[1]/2]
             if camera_txt_flag:
                 camera_id = create_camera_model(path=para_folder, camera_para = [camera_parameters], camera_size=resolution)
                 save_3d_points(para_folder)
             else:
                 camera_id = 1
             
-            pose_colmap = convert_coordinate(source_pose = camera_poes, reference_pose=reference_pose, index_of_cubemap=ind)
+            source_pose = [cam.rotation_mtx, cam.translation_vec]
+            pose_colmap = convert_coordinate(source_pose, reference_pose, index_of_cubemap=ind, new_angel = new_angel)
             save_pose(para_folder, pose_colmap, image_index, image_name, camera_id)
 
 
-def convert_coordinate(source_pose: list, reference_pose: list, index_of_cubemap: int):
+def convert_coordinate(source_pose: list, reference_pose: list, index_of_cubemap: int, new_angel: tuple=None):
     '''
         It computes the rotation and translation from the reference cube map to 
         the source cube map.
@@ -342,23 +364,44 @@ def convert_coordinate(source_pose: list, reference_pose: list, index_of_cubemap
             The pose of the reference image. camera -> world
         
         index_of_cubemap : int
-            Which cube map is uesd. 
+            Which cube map is uesd.
+        
+        new_angel: tuple
+            [phi, theta], the angle of the new view
         
     '''
-    tocolmap = VIEW_ROT[index_of_cubemap,:,:]
+    
+    ref_tocolmap = VIEW_ROT[index_of_cubemap,:,:]
+    src_tocolmap = VIEW_ROT[index_of_cubemap,:,:]
     
     rotation_ref = reference_pose[0]
     translation_ref = reference_pose[1]
     rotation_source = source_pose[0]
     translation_source = source_pose[1]
    
-    # convert the poses of images from camera->world (in general) to reference->source (colmap)
-    delta_rot = rotation_source.transpose().dot(rotation_ref.dot(tocolmap.transpose()))
-    quat_rot  = Rotation.from_dcm(tocolmap.dot(delta_rot)).as_quat()   
+    if new_angel is not None:
+        # mediate view    
+        if new_angel[0] == 0:
+            med_view2colmap = Rotation.from_euler('x', new_angel[1]).as_euler('zyx')[0]
+        elif new_angel[1] == 0:
+            med_view2colmap = Rotation.from_euler('z', new_angel[0]).as_euler('zyx')[0]
+        else:
+            med_view2colmap = Rotation.from_euler('zx', [new_angel[0], new_angel[1]]).as_euler('zyx')
+            
+        new_view2colmap = med_view2colmap + np.array([np.pi, 0, 0])
+        src_tocolmap = Rotation.from_euler('zyx', new_view2colmap).as_dcm()
     
+        
+    # convert the poses of images from camera->world (in general) to reference->source (colmap)
+    rotation_ref2world = rotation_ref.dot( ref_tocolmap.transpose() )
+    rotation_world2src = src_tocolmap.dot( rotation_source.transpose() )
+    
+    delta_rot = rotation_world2src.dot(rotation_ref2world)
+    quat_rot  = Rotation.from_dcm(delta_rot).as_quat() 
     quat_rot_colmap = [tmp for tmp in quat_rot[0:3]]
     quat_rot_colmap.insert(0, quat_rot[3])
-    translation = tocolmap.dot( rotation_source.transpose().dot(translation_ref - translation_source) ) 
+   
+    translation = rotation_world2src.dot(translation_ref - translation_source) 
     
     return [quat_rot_colmap, translation]
 

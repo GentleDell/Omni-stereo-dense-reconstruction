@@ -37,7 +37,7 @@ def view_selection(cam:Cam360, reference:np.array, initial_pose: tuple, fov: tup
             The reference image.
             
         initial_pose : tuple
-            The first pose to start the search.
+            The first pose to start the search. (phi, theta)
             
         fov: tuple
             Field of view of the selected view. 
@@ -76,12 +76,11 @@ def view_selection(cam:Cam360, reference:np.array, initial_pose: tuple, fov: tup
         
         # obtain a source view
         source = cubemaps.cube_projection(cam=cam, direction=(pose + fov), resolution=reference.shape)
-        source = np.round(source*255)    
-        source = cv2.cvtColor(source.astype('uint8'), cv2.COLOR_RGB2GRAY)
+        source_gray = cv2.cvtColor( np.round(source*255).astype('uint8'), cv2.COLOR_RGB2GRAY )
     
         # feature detection and matching
         kp1, des1 = orb.detectAndCompute(reference, None)
-        kp2, des2 = orb.detectAndCompute(source, None)
+        kp2, des2 = orb.detectAndCompute(source_gray, None)
     
         bf = cv2.BFMatcher(cv2.NORM_HAMMING, crossCheck=True)
         matches = bf.match(des1, des2)
@@ -90,21 +89,31 @@ def view_selection(cam:Cam360, reference:np.array, initial_pose: tuple, fov: tup
         # filtering outliers 
         if use_filter:
             matches = filter_matches(kp1, kp2, matches)
-        if len(matches) <= 5:
+        if len(matches) <= 10:
             warnings.warn("Can not find enough inlier matches")
             return None, None
         
         # calculate the distance between centroids
-        centroid_dist = feature_centroid_distance(kp1, kp2, matches, source.shape)
+        centroid_dist = feature_centroid_distance(kp1, kp2, matches, source_gray.shape)
                 
         if np.sqrt(np.sum(centroid_dist**2)) <= threshold:
             break
         else:
             # update poses
-            delta_phi = -np.arctan(centroid_dist[0]*unit_x)
-            delta_theta = -np.arctan(centroid_dist[1]*unit_y)
-            pose = (pose[0] + delta_phi, pose[1] + delta_theta)
+            phi = pose[0] - np.arctan(centroid_dist[0]*unit_x)
+            theta = pose[1] - np.arctan(centroid_dist[1]*unit_y)
+            
+            if phi < 0:
+                phi = phi + 2*np.pi
+            elif phi > 2*np.pi:
+                phi = phi - 2*np.pi
+            if theta < 0:
+                theta = -theta
+            elif theta > np.pi:
+                theta = 2*np.pi - theta
         
+            pose = (np.asscalar(phi), np.asscalar(theta))
+            
     return source, pose    
 
 

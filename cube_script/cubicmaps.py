@@ -305,6 +305,7 @@ class CubicMaps:
             points, mask_face  = self.spherical2img(face, resolution)
             Omni_image[ mask_face, :]  = spline.interpolate(points, diff=False)
             
+        Omni_image = np.clip(Omni_image ,a_min=0, a_max=1)
         self._omnimage = None
         self._omnimage = Omni_image.reshape([resolution[0], resolution[1], -1])
         
