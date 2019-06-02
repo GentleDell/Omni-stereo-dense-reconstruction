@@ -20,8 +20,8 @@ parser.add_argument("--path_to_image"  ,  type=str,  default='../data_demo/datas
 parser.add_argument("--patchmatch_path",  type=str,  default='../colmap', help="Where is the exectable file of patch matching stereo GPU")
 parser.add_argument("--workspace"      ,  type=str,  default='../data_demo/workspace',  help="Where to store the workspace") 
 parser.add_argument("--reference_image",  type=int,  default=4,  help="Which image is the used as the reference image to create the world coordinate, start from 0;")
-parser.add_argument("--use_colmap"     ,  type=bool, default=False,  help="Use orignal colmap or the modified PatchMatchingStereoGPU adapted from colmap") 
-parser.add_argument("--use_view_selection" ,  type=bool, default=True,  help="select views for dense reconstruction") 
+parser.add_argument("--use_colmap"         , default=False, action='store_true', help="Use orignal colmap or the modified PatchMatchingStereoGPU adapted from colmap") 
+parser.add_argument("--use_view_selection" , default=False, action='store_true', help="select views for dense reconstruction") 
 parser.add_argument("--views_for_synthesis",  type=int , default=4,  help="The number of views to synthesize the 360 depthmap; only 4 and 6 are supported") 
 parser.add_argument("--pose_list"      ,  nargs='+', default=['4'],  help="A list of pose corresponding to the images") 
 
