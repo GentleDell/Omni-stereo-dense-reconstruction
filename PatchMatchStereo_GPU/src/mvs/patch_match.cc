@@ -162,6 +162,11 @@ void PatchMatch::Run() {
   patch_match_cuda_->Run();
 }
 
+// added by zhantao.deng@epfl
+DepthMap PatchMatch::GetCostMap() const {
+    return patch_match_cuda_->GetCostMap();
+}
+
 DepthMap PatchMatch::GetDepthMap() const {
   return patch_match_cuda_->GetDepthMap();
 }
@@ -420,6 +425,9 @@ void PatchMatchController::ProcessProblem(const PatchMatchOptions& options,
   const std::string image_name = model.GetImageName(problem.ref_image_idx);
   const std::string file_name =
       StringPrintf("%s.%s.bin", image_name.c_str(), output_type.c_str());
+  // added by zhantao.deng@epfl
+  const std::string cost_map_path =
+      JoinPaths(workspace_path_, stereo_folder, "cost_maps", file_name);
   const std::string depth_map_path =
       JoinPaths(workspace_path_, stereo_folder, "depth_maps", file_name);
   const std::string normal_map_path =
@@ -508,6 +516,9 @@ void PatchMatchController::ProcessProblem(const PatchMatchOptions& options,
             << StringPrintf("Writing %s output for %s", output_type.c_str(),
                             image_name.c_str())
             << std::endl;
+
+  // added by zhantao.deng@epfl
+  patch_match.GetCostMap().Write(cost_map_path);
 
   patch_match.GetDepthMap().Write(depth_map_path);
   patch_match.GetNormalMap().Write(normal_map_path);

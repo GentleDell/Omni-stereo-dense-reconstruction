@@ -58,6 +58,7 @@ class PatchMatchCuda {
 
   void Run();
 
+  DepthMap GetCostMap() const;
   DepthMap GetDepthMap() const;
   NormalMap GetNormalMap() const;
   Mat<float> GetSelProbMap() const;

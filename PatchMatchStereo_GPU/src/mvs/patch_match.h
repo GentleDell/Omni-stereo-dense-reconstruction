@@ -208,6 +208,10 @@ class PatchMatch {
   ConsistencyGraph GetConsistencyGraph() const;
   Mat<float> GetSelProbMap() const;
 
+  // This function is added by zhantao.deng@epfl
+  // to get the cost map as confidence of the depth
+  DepthMap GetCostMap() const;
+
  private:
   const PatchMatchOptions options_;
   const Problem problem_;

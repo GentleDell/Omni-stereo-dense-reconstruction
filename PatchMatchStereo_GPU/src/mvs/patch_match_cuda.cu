@@ -1201,6 +1201,12 @@ void PatchMatchCuda::Run() {
 #undef CALL_RUN_FUNC
 }
 
+// added by zhantao.deng@epfl
+DepthMap PatchMatchCuda::GetCostMap() const{
+    return DepthMap(cost_map_->CopyToMat(), options_.depth_min,
+                    options_.depth_max);
+}
+
 DepthMap PatchMatchCuda::GetDepthMap() const {
   return DepthMap(depth_map_->CopyToMat(), options_.depth_min,
                   options_.depth_max);
