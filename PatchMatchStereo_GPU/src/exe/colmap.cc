@@ -1988,10 +1988,13 @@ int main(int argc, char** argv) {
  *      1. default camera model  : SIMPLE_RADIAL -->  SIMPLE_PINHOLE      @ image_reader.h
  *      2. default view selection: __auto__,30   -->   __all__            @ undistortion.cc
  *      3. default depth range   :     5000      -->     500              @ patch_match.cc
- *      4. costmaps is output as the confidence map of corresponding depthmaps      @ patch_match.h & patch_match.cc
+ *      4. costmaps are output as confidence maps of corresponding depthmaps      @ patch_match.h, patch_match.cc, patch_match_cuda.h and patch_match_cuda.cu
  *
  * other changes:
  *      1. in auto_reconstruction: one camera for one image is changed to sharing the same camera model for all images        @ image_reader.h, @ auto_reconstruction.h
+ *
+ *
+ * all changes are marked by "// added by zhantao.deng@epfl"
  */
 
     colmap::InitializeGlog(argv);
