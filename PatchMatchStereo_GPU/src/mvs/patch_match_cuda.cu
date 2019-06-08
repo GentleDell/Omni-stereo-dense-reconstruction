@@ -1203,8 +1203,7 @@ void PatchMatchCuda::Run() {
 
 // added by zhantao.deng@epfl
 DepthMap PatchMatchCuda::GetCostMap() const{
-    return DepthMap(cost_map_->CopyToMat(), options_.depth_min,
-                    options_.depth_max);
+    return DepthMap(cost_map_->CopyToMat());
 }
 
 DepthMap PatchMatchCuda::GetDepthMap() const {

@@ -48,6 +48,9 @@ class DepthMap : public Mat<float> {
            const float depth_max);
   DepthMap(const Mat<float>& mat, const float depth_min, const float depth_max);
 
+// added by zhantao deng to output costmap
+  DepthMap(const Mat<float>& mat);
+
   inline float GetDepthMin() const;
   inline float GetDepthMax() const;
 

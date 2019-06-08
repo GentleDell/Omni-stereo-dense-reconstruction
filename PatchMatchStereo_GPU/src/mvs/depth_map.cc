@@ -54,6 +54,14 @@ DepthMap::DepthMap(const Mat<float>& mat, const float depth_min,
   data_ = mat.GetData();
 }
 
+// added by zhantao deng to output costmap
+DepthMap::DepthMap(const Mat<float>& mat)
+    : Mat<float>(mat.GetWidth(), mat.GetHeight(), mat.GetDepth()),
+      depth_min_(0),
+      depth_max_(1000) {
+  data_ = mat.GetData();
+}
+
 void DepthMap::Rescale(const float factor) {
   if (width_ * height_ == 0) {
     return;
