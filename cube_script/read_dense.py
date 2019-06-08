@@ -31,7 +31,6 @@
 
 import glob
 import numpy as np
-import pylab as plt
 
 
 def read_array(path):
@@ -51,22 +50,3 @@ def read_array(path):
         array = np.fromfile(fid, np.float32)
     array = array.reshape((width, height, channels), order="F")
     return np.transpose(array, (1, 0, 2)).squeeze()
-
-
-def main():
-    # Read depth and normal maps corresponding to the same image.
-    depth_map = read_array(
-        "path/to/dense/stereo/depth_maps/image1.jpg.photometric.bin")
-    normal_map = read_array(
-        "path/to/dense/stereo/normal_maps/image1.jpg.photometric.bin")
-
-    # Visualize the depth map.
-    min_depth, max_depth = np.percentile(depth_map, [5, 95])
-    depth_map[depth_map < min_depth] = min_depth
-    depth_map[depth_map > max_depth] = max_depth
-    plt.imshow(depth_map)
-    plt.show()
-
-
-if __name__ == "__main__":
-    main()

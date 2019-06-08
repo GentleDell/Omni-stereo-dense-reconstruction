@@ -82,7 +82,7 @@ def dense_from_cam360list(cam360_list: list, reference_image: int, workspace: st
         save these data as .txt file to workspace/cubemaps/parameters/view* for patch 
         matching stereo.
         
-        After preparation, it calls Patch Matching Stereo GPU to work on cubic maps and 
+        After preparation, it calls Patch Matching Stereo GPU (from colmap) to work on cubic maps and 
         reorganize the estimated depth maps to /workspace/omni_depthmaps/image_name/.
         
         Finally, it reproject the cubic depth maps back to the 360 camera to obtain the 
@@ -162,14 +162,28 @@ def dense_from_cam360list(cam360_list: list, reference_image: int, workspace: st
 
     # collect cubemaps belonging to same omnidirectional images
     print("\n\nReorganizing workspace ...")
-    organize_cubedepth(workspace=workspace)
+    organize_workspace(workspace=workspace)
 
     # project cubic depth to omnidirectional depthmap
     print("\n\nReprojecting cubic depth to 360 depth ...")
     resolution = [cam360_list[0]._height, cam360_list[0]._width]
-    reconstruct_omni_depthmap(omni_workspace=os.path.join(workspace, 'omni_depthmap/*'), view_to_syn=views_for_synthesis, resolution=resolution)
+    depth_list = reconstruct_omni_maps(omni_workspace=os.path.join(workspace, 'omni_depthmap/depth_maps/*'), 
+                                       view_to_syn=views_for_synthesis, 
+                                       maps_type='depth_maps',
+                                       resolution=resolution)
     
-    return True
+    # project cost maps
+    print("\n\nReprojecting cost maps ...")
+    resolution = [cam360_list[0]._height, cam360_list[0]._width]
+    depth_list = reconstruct_omni_maps(omni_workspace=os.path.join(workspace, 'omni_depthmap/cost_maps/*'), 
+                                       view_to_syn=views_for_synthesis, 
+                                       maps_type='cost_maps',
+                                       resolution=resolution)
+    
+    for ind, cam in enumerate(cam360_list):
+        cam.texture = depth_list[ind]
+       
+    return cam360_list
 
 
 def set_patchmatch_cfg(workspace: str):
@@ -573,7 +587,7 @@ def create_camera_model( path: str = './', camera_para: list = None, camera_size
     return camera_id + 1 + previous_camera
 
 
-def organize_cubedepth(workspace: str):
+def organize_workspace(workspace: str):
     '''
         For each omnidirectional image, it copies the corresponding cubic depth maps
         to: /workspace/omni_depthmap/image_name
@@ -588,24 +602,44 @@ def organize_cubedepth(workspace: str):
     
     check_path_exist(dst_folder)
     
-    for image in sorted(glob.glob( os.path.join(depth_path, 'view0/stereo/depth_maps/*.geometric.bin' ))):
+    # reorganize depth maps and cost maps
+    organize_outputs(colmap_ws=depth_path, dst_folder=dst_folder, target = 'depth_maps')
+    organize_outputs(colmap_ws=depth_path, dst_folder=dst_folder, target = 'cost_maps')
+    
+    
+def organize_outputs(colmap_ws: str, dst_folder: str, target: str):
+    '''
+        It collect all target files under the colmap_ws to dst_folder according to
+        filenames.
+        
+        colmap_ws: str
+            path to the colmap workspace
+        
+        dst_folder: str
+            destination folder
+            
+        target: str
+            file to be reorganized, e.g. depth_map, cost_map and normal_map
+    '''
+    for image in sorted(glob.glob( os.path.join(colmap_ws, 'view0/stereo/' + target + '/*.geometric.bin' ))):
         
         image_name = image.split('/')[-1].split('.')[0][:-6]
         
-        for depth_view in sorted(glob.glob( os.path.join(depth_path, 'view*') )):
+        for depth_view in sorted(glob.glob( os.path.join(colmap_ws, 'view*') )):
             view_num = depth_view.split('/')[-1]
-            depth_file = glob.glob( os.path.join(depth_path, view_num+'/stereo/depth_maps/{:s}*.geometric.bin'.format(image_name)) )[0]
+            depth_file = glob.glob( os.path.join(colmap_ws, view_num+'/stereo/' + target + '/{:s}*.geometric.bin'.format(image_name)) )[0]
             
-            dst_path = os.path.join(dst_folder,'{:s}'.format(image_name)) 
+            dst_path = os.path.join(dst_folder, target + '/{:s}'.format(image_name)) 
             check_path_exist(dst_path)
             
-            copyfile(depth_file, os.path.join(dst_path, '{:s}_{:s}.geometric.bin'.format( image_name, view_num)))        
+            copyfile(depth_file, os.path.join(dst_path, '{:s}_{:s}.geometric.bin'.format( image_name, view_num))) 
 
 
-def reconstruct_omni_depthmap(omni_workspace: str, Camera_parameter: list = None, 
-                              view_to_syn: int = 6, resolution: list = None, save_omni: bool = True):
+def reconstruct_omni_maps(omni_workspace: str, Camera_parameter: list = None, view_to_syn: int = 6, 
+                          resolution: list = None, maps_type: str = "depth_maps", save_omni: bool = True):
     '''
         It projects depth maps to omnidirectional depth map.
+        
         Parameters
         ----------    
         omni_workspace: str
@@ -621,24 +655,32 @@ def reconstruct_omni_depthmap(omni_workspace: str, Camera_parameter: list = None
         resolution: list
             The resolution of ouput depth map.
             
+        maps_type: str
+            Type of the maps to be projected, options: [depth_maps, cost_maps, normal_maps]
+            
         save_omni: bool
             Whether to save the omnidirectional depth map.
             
     '''
+    depth_list = []
     for folder in sorted( glob.glob( omni_workspace )):
         file_name = folder.split('/')[-1]
-        project_colmap_depth(path = folder,
-                             view_name = file_name,
-                             views_list = [num for num in range(view_to_syn)],
-                             output_resolution=resolution, 
-                             use_radial_dist=True, 
-                             camera_para=Camera_parameter,
-                             save=save_omni)
+        omni_depth = project_colmap_maps(path=folder,
+                                          view_name=file_name,
+                                          views_list=[num for num in range(view_to_syn)],
+                                          output_resolution=resolution, 
+                                          use_radial_dist=True, 
+                                          camera_para=Camera_parameter,
+                                          map_type=maps_type,
+                                          save=save_omni)
+        depth_list.append(omni_depth)
+    return depth_list
+        
 
 
-def project_colmap_depth(path: str, view_name: str = None, views_list: list = [],
+def project_colmap_maps(path: str, view_name: str = None, views_list: list = [],
                          output_resolution: tuple=None, use_radial_dist: bool = False,
-                         camera_para: list=None, save: bool = True) -> np.array:
+                         camera_para: list=None, map_type: str="depth_maps", save: bool = True) -> np.array:
     '''
         It loads 6 or 4 cubemaps from the given path and merge them to a omnidirectional depth map.
         
@@ -661,6 +703,9 @@ def project_colmap_depth(path: str, view_name: str = None, views_list: list = []
             
         camera_para: list
             A list of camera parameters: [fx, fy, cx, cy]
+        
+        map_type: str
+            Type of the maps to be projected, options: [depth_maps, cost_maps, normal_maps]
             
         save: bool
             Whether to save the result or not.
@@ -672,7 +717,7 @@ def project_colmap_depth(path: str, view_name: str = None, views_list: list = []
         
         Example:
         --------
-        >>> estimated = project_colmap_depth(path = path_to_dmap, view_name = name_pattern,
+        >>> estimated = project_colmap_maps(path = path_to_dmap, view_name = name_pattern,
                                  views_list = [0,1,2,3], output_resolution=(512, 1024), 
                                  use_radial_dist=True,  camera_para=[256,256,256,256], save=False)
     '''
@@ -686,7 +731,7 @@ def project_colmap_depth(path: str, view_name: str = None, views_list: list = []
             path_to_file.append( os.path.join(path, view_name + '_view' + str(ind) + '.*'))
     
     cubemap = CubicMaps()
-    cubemap.load_depthmap(path_to_file=path_to_file)
+    cubemap.load_depthmap(path_to_file=path_to_file, type_ = map_type)
     
     if use_radial_dist:
         if camera_para is None:
@@ -695,12 +740,18 @@ def project_colmap_depth(path: str, view_name: str = None, views_list: list = []
             raise ValueError("Inpute ERROR. Camera parameters should have 4 parameters:[fx, fy, cx, cy].")
         
         for ind in range(len(path_to_file)):
-            cubemap.depthmap[ind] = cubemap.depth_trans(cubemap.depthmap[ind], camera_para)
+            if map_type == 'depth_maps':
+                cubemap.depthmap[ind] = cubemap.depth_trans(cubemap.depthmap[ind], camera_para)
+            elif map_type == 'normal_maps':
+                warnings.warn("Project normal maps are not supported by now.")
     
     cubemap.cube2sphere_fast(resolution = output_resolution)
     
     if save:
-        cubemap.save_omnimage(path=path)
+        if map_type == 'depth_maps' or 'cost_maps':
+            cubemap.save_omnimage(path=path, name='360_'  + map_type + '.exr')
+        else:
+            cubemap.save_omnimage(path=path, name='360_'  + map_type + '.png')
     
     return cubemap.omnimage
     

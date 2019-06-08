@@ -151,7 +151,7 @@ class CubicMaps:
                 else:
                     raise ValueError('Input ERROR! Invalid focal length or camera center')
             
-    def save_omnimage(self, path: str = './'):
+    def save_omnimage(self, path: str = './' , name: str = 'omnidirectional.png'):
         '''
             It saves the omnidirectional image obtained from 6 cubemaps.
             
@@ -167,9 +167,9 @@ class CubicMaps:
         if self._omnimage is None:
             warnings.warn("No valid omnidirectional image!")
         if self._omnimage.shape[2] == 3: 
-            cv2.imwrite( os.path.join(path, "omni_image.png"), 255*np.flip(self._omnimage,axis = 2))
+            cv2.imwrite( os.path.join(path, name), 255*np.flip(self._omnimage,axis = 2))
         else: 
-            cv2.imwrite( os.path.join(path, "omni_depthmap.exr"), self._omnimage.astype(np.float32))
+            cv2.imwrite( os.path.join(path, name), self._omnimage.astype(np.float32))
     
     
     def depth_trans(self, depthmap: np.ndarray=None, camera_parameters: list = None) -> np.ndarray:
@@ -261,11 +261,9 @@ class CubicMaps:
         if cube_list is None:
             if len(self._depthmap) == 6:
                 cube_list = self._depthmap.copy()
-                is_depth = True
                 is_texture = False
             elif len(self._cubemap) == 6:
                 cube_list = self._cubemap.copy()
-                is_depth = False
                 is_texture = True
             else:
                 raise ValueError('Bad input! Invalid input image list.')       
@@ -301,17 +299,28 @@ class CubicMaps:
             for ind, img in enumerate(temp):
                 cube_list[ order[ind] ] = img         
         
-        for face in range(len(cube_list)):
-            # Create a spline approximation of the camera texture.
-            spline = CubicSplines(low, up, orders, 
-                                  np.reshape(cube_list[face], (height * width, channel)))
-            
-            points, mask_face  = self.spherical2img(face, resolution)
-            Omni_image[ mask_face, :]  = spline.interpolate(points, diff=False)
-        
         if is_texture:
-            Omni_image = np.clip(Omni_image ,a_min=0, a_max=1)
-        self._omnimage = None
+            for face in range(len(cube_list)):
+                # Create a spline approximation of the camera texture.
+                spline = CubicSplines(low, up, orders, 
+                                      np.reshape(cube_list[face], (height * width, channel)))
+                
+                points, mask_face  = self.spherical2img(face, resolution)
+                Omni_image[ mask_face, :]  = spline.interpolate(points, diff=False)
+                Omni_image = np.clip(Omni_image ,a_min=0, a_max=1)
+        else:
+            cube_res_row = cube_list[0].shape[0]
+            cube_res_col = cube_list[0].shape[1]
+            
+            delta_row = 2/cube_res_row
+            delta_col = 2/cube_res_col
+            
+            for face in range(len(cube_list)):
+                points, mask_face  = self.spherical2img(face, resolution)
+                row = np.rint(points[:,0]/delta_row - 1).astype(int).clip(min = 0, max = cube_res_row-1)
+                col = np.rint(points[:,1]/delta_col - 1).astype(int).clip(min = 0, max = cube_res_col-1)
+                Omni_image[ mask_face, :] = cube_list[face][row, col]
+                
         self._omnimage = Omni_image.reshape([resolution[0], resolution[1], -1])
         
     
@@ -893,14 +902,17 @@ class CubicMaps:
         
         
 ###### adapted from colmap ######
-    def load_depthmap(self, path_to_file: list):
+    def load_depthmap(self, path_to_file: list, type_: str):
         if len(path_to_file)==6:
             if len(self._depthmap) != 0:
                 warnings.warn("Depth maps will be replaced!")
                 self._depthmap = []
             for ct in range(6):
                 raw_depthmap = read_array(path_to_file[ct])
-                depth_map = self.filt_depthoutliers(raw_depthmap)
+                if type_ == 'depth_maps':
+                    depth_map = self.filt_depthoutliers(raw_depthmap)
+                elif type_ == 'cost_maps':
+                    depth_map = np.median(raw_depthmap, axis = 2)
                 self._depthmap.append(np.expand_dims(depth_map, axis = 2))
                 
         elif len(path_to_file)==4:
@@ -911,7 +923,10 @@ class CubicMaps:
             
             for ct in range(4):
                 raw_depthmap = read_array(path_to_file[ct])
-                depth_map = self.filt_depthoutliers(raw_depthmap)
+                if type_ == 'depth_maps':
+                    depth_map = self.filt_depthoutliers(raw_depthmap)
+                elif type_ == 'cost_maps':
+                    depth_map = np.median(raw_depthmap, axis = 2)
                 self._depthmap.append(np.expand_dims(depth_map, axis = 2))
             self._depthmap.append(np.zeros(self._depthmap[1].shape))
             self._depthmap.append(np.zeros(self._depthmap[1].shape))
