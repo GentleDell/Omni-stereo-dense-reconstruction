@@ -163,6 +163,9 @@ void COLMAPUndistorter::Run() {
   CreateDirIfNotExists(JoinPaths(output_path_, "images"));
   CreateDirIfNotExists(JoinPaths(output_path_, "sparse"));
   CreateDirIfNotExists(JoinPaths(output_path_, "stereo"));
+  // added by zhantao deng to output costmaps
+  CreateDirIfNotExists(JoinPaths(output_path_, "stereo/cost_maps"));
+
   CreateDirIfNotExists(JoinPaths(output_path_, "stereo/depth_maps"));
   CreateDirIfNotExists(JoinPaths(output_path_, "stereo/normal_maps"));
   CreateDirIfNotExists(JoinPaths(output_path_, "stereo/consistency_graphs"));
