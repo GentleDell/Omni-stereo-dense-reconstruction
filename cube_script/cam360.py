@@ -16,6 +16,7 @@ class Cam360:
     -   the radius adopted in the local parametrization,
     -   the camera texture,
     -   the camera depth map.
+    -   the camera cost map for the depth (added by zhantao deng)
 
     The camera texture is organized in an HxW equiangular grid:
 
@@ -45,7 +46,8 @@ class Cam360:
     def __init__(self,
                  rotation_mtx: np.array, translation_vec: np.array,
                  height: int, width: int, channels: int,
-                 texture: Optional[np.array] = None, depth: Optional[np.array] = None):
+                 texture: Optional[np.array] = None, depth: Optional[np.array] = None,
+                 cost: Optional[np.array] = None ):
 
         # Rotation matrix and translation vector.
         self._rotation_mtx = rotation_mtx
@@ -76,6 +78,11 @@ class Cam360:
         # Set the depth map, if available.
         self._depth = None
         self.depth = depth                  # Initialization of self._depth.
+        
+        # Set the cost map, if available. (added by zhantao deng)
+        self._cost = None
+        self.cost = cost
+        
 
     @property
     def rotation_mtx(self) -> np.array:
@@ -191,7 +198,7 @@ class Cam360:
     def depth(self) -> Optional[np.array]:
         return self._depth
 
-    @depth.setter
+    @depth.setter 
     def depth(self, depth_new: np.array) -> None:
 
         if depth_new is None:
@@ -210,7 +217,30 @@ class Cam360:
             depth_new_clipped = np.clip(depth_new, Cam360.DEPTH_MIN, Cam360.DEPTH_MAX)
 
             self._depth = depth_new_clipped
-
+            
+    # added by zhantao deng
+    @property
+    def cost(self) -> Optional[np.array]:
+        return self._cost
+    
+    # added by zhantao deng
+    @cost.setter
+    def cost(self, cost_new: np.array) -> None:
+        
+        if cost_new is None:
+    
+            self._cost = None
+        
+        else:
+            
+            if cost_new.ndim != 2:
+                raise ValueError('The input cost map must be a 2D numpy array.')
+            
+            if (cost_new.shape[0] != self._height) or (cost_new.shape[1] != self._width):
+                raise ValueError('The input cost map does not match the camera specs.')
+                
+            self._cost = cost_new
+                
     def get_texture_at(self,
                        theta: np.array, phi: np.array, grad=False) -> \
             Optional[Union[np.array, Tuple[np.array, np.array, np.array]]]:

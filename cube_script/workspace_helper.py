@@ -67,14 +67,45 @@ VIEW_ROT = np.array([[[-1,0,0], [0,0,-1], [0,-1,0]],
                      [[ 1,0,0], [0, 1,0], [0,0, 1]],
                      [[ 1,0,0], [0,-1,0], [0,0,-1]]])
 
-NUM_VIEWS = 6
+BEST_OF_N_VIEWS = 10
 
 
-def dense_from_cam360list(cam360_list: list, reference_image: int, workspace: str, patchmatch_path: str, 
+def dense_from_cam360list(cam360_list: list, workspace: str, patchmatch_path: str, views_for_synthesis: int=4,
+                          use_colmap: bool=False, use_view_selection: bool=False):
+    """
+        Given a list of cam360 objects, it calls 'estimate_dense_depth' to estimate 
+        depth for all cam360 objects in the list.
+        
+        Parameters
+        ----------    
+        cam360_list : list of cam360 objs
+            A list containing cam360 objects;
+            
+        workspace : str
+            Where to save the whole work space;
+            
+        patchmatch_path: str
+            Where to find the executable patch matching stereo GPU file. 
+            
+        views_for_synthesis: int
+            The number of views (4 or 6) to synthesis the omnidirectional depthmap. 
+            4 means the sky and ground will be neglected.        
+    """
+    for cnt in range(len(cam360_list)):
+        cam360_list = estimate_dense_depth(cam360_list, 
+                                           reference_image = cnt,
+                                           workspace = workspace,
+                                           patchmatch_path = patchmatch_path, 
+                                           views_for_synthesis = views_for_synthesis,
+                                           use_colmap = use_colmap,
+                                           use_view_selection = use_view_selection)
+    
+
+def estimate_dense_depth(cam360_list: list, reference_image: int, workspace: str, patchmatch_path: str, 
                           views_for_synthesis: int=4, use_colmap: bool=False, use_view_selection: bool=False):
     """
-        Given a list of cam360 objects, it estimates corresponding depthmaps.
-        
+        Given a list of cam360 objects, it estimates depthmap for the reference image.
+    
         Firstly, it generates cubic maps for all objects. Then it collects cubic maps 
         according to the view (back/front/laft/right) and saves diffetent views to
         corresponding folders (workspace/cubemaps/view0, workspace/cubemaps/view1, etc.).
@@ -109,17 +140,16 @@ def dense_from_cam360list(cam360_list: list, reference_image: int, workspace: st
         
         Examples
         --------
-        >>> dense_from_cam360list(cam360_list = [cam360_1, cam360_2, cam360_3], 
+        >>> estimate_dense_depth(cam360_list = [cam360_1, cam360_2, cam360_3], 
                                   workspace = './workspace',
                                   reference_image = 4,  
-                                  patchmatch_path = ./colmap, 
+                                  patchmatch_path = './colmap', 
                                   views_for_synthesis = 4,
                                   use_colmap = True)
     """
-    
     # create a workspace for patch matching stereo GPU
-    create_workspace_from_cam360_list(cam_list=cam360_list, refimage_index=reference_image, 
-                                      work_dir = workspace, view_selection=use_view_selection)
+    scores_list = create_workspace_from_cam360_list(cam_list=cam360_list, refimage_index=reference_image, number_of_views = views_for_synthesis,
+                                                    work_dir = workspace, view_selection=use_view_selection)
         
     # run patch matching stereo on each cube views
     print("\n\nExecuting patch match stereo GPU")
@@ -132,25 +162,25 @@ def dense_from_cam360list(cam360_list: list, reference_image: int, workspace: st
         check_path_exist(output_path)
         
         if use_colmap:
-            command = patchmatch_path + \
-                      " image_undistorter" + \
-                      " --image_path="  + image_path + \
-                      " --input_path="  + input_path + \
-                      " --output_path=" + output_path
-            CM = subprocess.Popen(command, shell=True)
-            CM.wait()
+#            command = patchmatch_path + \
+#                      " image_undistorter" + \
+#                      " --image_path="  + image_path + \
+#                      " --input_path="  + input_path + \
+#                      " --output_path=" + output_path
+#            CM = subprocess.Popen(command, shell=True)
+#            CM.wait()
             
             # modify the patch-match.cfg file to set number of source image or 
             # specify the images to be used
-            set_patchmatch_cfg(output_path)
+            set_patchmatch_cfg(output_path, reference_image, scores_list, view)
             
-            command = patchmatch_path + \
-                      " patch_match_stereo" + \
-                      " --workspace_path="  + output_path + \
-                      " --PatchMatchStereo.depth_min=10"  + \
-                      " --PatchMatchStereo.depth_max=500"
-            CM = subprocess.Popen(command, shell=True)
-            CM.wait()
+#            command = patchmatch_path + \
+#                      " patch_match_stereo" + \
+#                      " --workspace_path="  + output_path + \
+#                      " --PatchMatchStereo.depth_min=10"  + \
+#                      " --PatchMatchStereo.depth_max=500"
+#            CM = subprocess.Popen(command, shell=True)
+#            CM.wait()
             
         else:
             command = patchmatch_path +\
@@ -174,28 +204,67 @@ def dense_from_cam360list(cam360_list: list, reference_image: int, workspace: st
     
     # project cost maps
     print("\n\nReprojecting cost maps ...")
-    resolution = [cam360_list[0]._height, cam360_list[0]._width]
-    depth_list = reconstruct_omni_maps(omni_workspace=os.path.join(workspace, 'omni_depthmap/cost_maps/*'), 
+    cost_list = reconstruct_omni_maps(omni_workspace=os.path.join(workspace, 'omni_depthmap/cost_maps/*'), 
                                        view_to_syn=views_for_synthesis, 
                                        maps_type='cost_maps',
                                        resolution=resolution)
     
-    for ind, cam in enumerate(cam360_list):
-        cam.texture = depth_list[ind]
+
+    # save costs and depth of the reference image to the corresponding object
+    cam360_list[reference_image].depth(depth_list[reference_image])
+    cam360_list[reference_image].cost(cost_list[reference_image])
        
     return cam360_list
 
 
-def set_patchmatch_cfg(workspace: str):
-    pattern = '__auto__.*'
-    rep_txt = '__all__' 
-    with open(os.path.join(workspace, 'stereo/patch-match.cfg'), 'r') as file:
+def set_patchmatch_cfg(workspace: str, reference_image: int, score_list: list, view_ind : int):
+    '''
+        It keeps the top BEST_OF_N_VIEWS views to reconstruct scenes according
+        to the given scores. To reduce computation cost, it only reconstruct 
+        the reference view.
+        
+        Parameters
+        ----------            
+        workspace : str
+            Where to save the whole work space;
+        
+        reference_image : int
+            Index of the reference cam360 object whose local coordinate will be used as 
+            the world corrdinate in patch matching stereo;
+            
+        score_list : list
+            A list of scores corresponding to all views. For invalid views, the scores
+            are None.
+            
+        view_ind : int
+            The index of the current cubic view. Smaller or equal to views_for_synthesis. 
+            
+    '''
+    # define paths
+    path_to_images = os.path.join(workspace, 'images/*')
+    path_to_config = os.path.join(workspace, 'stereo/patch-match.cfg')
+    
+    # obtain all image names (except for the reference image) and 
+    # create a dictionary for images and corresponding valid scores
+    image_list = [ image.split('/')[-1] for image in sorted(glob.glob(path_to_images)) if "_{:d}_".format(reference_image+1) not in image ]
+    valid_scores = [score[view_ind] for score in score_list if score[view_ind] is not None]
+    assert len(image_list) == len(valid_scores), "The number of valid images does not match the number of scores"
+    image_score_dict = dict(zip(image_list, valid_scores))
+    
+    # keep the top N views
+    sort_image = sorted(image_score_dict.items(), key=lambda item:item[1], reverse=True)[:BEST_OF_N_VIEWS]
+    
+    # set the config file
+    with open(path_to_config, 'r') as file:
         config = file.read()
     
-    config = re.sub(pattern, rep_txt, config)
+    config = "cam360_{:d}_view{:d}.png\n".format(reference_image+1, view_ind)
+    src_img = [ image[0]+', ' for image in sort_image]
+    config = config + "".join(src_img)[:-2]
     
-    with open(os.path.join(workspace, 'stereo/patch-match.cfg'), 'w') as file:
+    with open(path_to_config, 'w') as file:
         file.write(config)
+        
         
 def check_path_exist(path: str):
     '''
@@ -215,8 +284,8 @@ def show_processbar(num: int, all_steps: int):
     sys.stdout.flush()
 
 
-def create_workspace_from_cam360_list( cam_list: list, refimage_index: int = -1, cubemap_resolution: tuple = None, 
-                                       work_dir: str = './workspace', view_selection: bool = False):
+def create_workspace_from_cam360_list( cam_list: list, refimage_index: int = -1, number_of_views: int = 6,
+                                       cubemap_resolution: tuple = None, work_dir: str = './workspace', view_selection: bool = False):
     """
         Given a list of cam360 objects, it decomposes these cam360 objs and creates a 
         workspace for patch match stereo GPU.
@@ -236,6 +305,9 @@ def create_workspace_from_cam360_list( cam_list: list, refimage_index: int = -1,
         refimage_index : int
             Index of the reference cam360 object whose local coordinate will be used as 
             the world corrdinate in patch matching stereo; start from 0;
+        
+        number_of_views: int 
+            Number of views to be decomposed;
         
         cubemap_resolution: tuple
             The resolution of cubic maps.
@@ -257,9 +329,12 @@ def create_workspace_from_cam360_list( cam_list: list, refimage_index: int = -1,
         raise ValueError("Image is not enough to reconstruct depthmap")
     if refimage_index < 0:
         raise ValueError("Invalid index to reference image")    
+    if number_of_views != 4 and number_of_views != 6:
+        raise ValueError("Only 4 and 6 views are supported")    
     
     ref_cam = cam_list[refimage_index]   
-
+    score_cam = []
+    
     camera_txt_flag = True # whether to writh camera model .txt
     for ind, src_cam in enumerate(cam_list):
         # ckeck the textures
@@ -273,15 +348,17 @@ def create_workspace_from_cam360_list( cam_list: list, refimage_index: int = -1,
             enable_view_selection = (ind!=refimage_index) and view_selection
             
             # decompose omnidirectional image into 6 cubic maps and save them
-            decompose_and_save(src_cam, ref_cam, cubemap_resolution, work_dir, prefix="cam360", 
-                               image_index = ind + 1, camera_txt_flag=camera_txt_flag, select_view=enable_view_selection)
+            scores, camera_txt_flag = decompose_and_save(src_cam, ref_cam, cubemap_resolution, work_dir, prefix="cam360", number_of_views=number_of_views,
+                                                             image_index = ind + 1, camera_txt_flag=camera_txt_flag, select_view=enable_view_selection)
+            score_cam.append(scores)
                 
-            camera_txt_flag = False # only write once
             # present the process
             show_processbar(ind+1, len(cam_list))
+            
+    return score_cam
 
 
-def decompose_and_save(cam: Cam360, ref_cam: Cam360, resolution: tuple=None, work_dir: str="./workspace",
+def decompose_and_save(cam: Cam360, ref_cam: Cam360, resolution: tuple=None, work_dir: str="./workspace", number_of_views: int=6,
                         prefix: str="cam360_cubemap",  image_index:int=0,  camera_txt_flag: bool=True, select_view: bool=False):
     """
         Given a cam360 objects, it decomposes the cam360 objs into 6 cubic maps
@@ -332,7 +409,8 @@ def decompose_and_save(cam: Cam360, ref_cam: Cam360, resolution: tuple=None, wor
         
         prefix = prefix + "_{:d}".format(image_index)
         new_angle = None
-        for ind in range(NUM_VIEWS):
+        score_list = []
+        for ind in range(number_of_views):
                        
             view_folder = os.path.join(work_dir, 'cubemaps/view' + str(ind))
             para_folder = os.path.join(work_dir, 'cubemaps/parameters/view' + str(ind))
@@ -340,28 +418,44 @@ def decompose_and_save(cam: Cam360, ref_cam: Cam360, resolution: tuple=None, wor
             check_path_exist(para_folder)
             
             if select_view:
+                # compute initial pose
                 intial_z = cam.rotation_mtx.transpose().dot(reference_pose[0].dot( VIEW_ROT[ind].transpose() )).dot(np.array([0,0,1]))
                 intial_z = np.expand_dims(intial_z, axis=1)
                 initial_pose = eu2pol(intial_z[0], intial_z[1], intial_z[2])
-                cubemap_obj.cubemap[ind], new_angle = view_selection(cam, 
-                                                                     reference_cube[ind], 
-                                                                     initial_pose=(np.abs(initial_pose[1]), np.abs(initial_pose[0])))
-            
-            image_path = cubemap_obj.save_cubemap(path = view_folder, prefix = prefix, index=[ind])   
-            image_name = image_path[0].split('/')[-1]
-        
-        # TODO: support images taken by different camera models
-        
-            camera_parameters = [resolution[0]/2, resolution[1]/2, resolution[0]/2, resolution[1]/2]
-            if camera_txt_flag:
-                camera_id = create_camera_model(path=para_folder, camera_para = [camera_parameters], camera_size=resolution)
-                save_3d_points(para_folder)
+                # select view
+                cubemap_obj.cubemap[ind], new_angle, score = view_selection(cam, reference_cube[ind], 
+                                                                            initial_pose=(np.abs(initial_pose[1]), np.abs(initial_pose[0])))
             else:
-                camera_id = 1
+                score = None
             
-            source_pose = [cam.rotation_mtx, cam.translation_vec]
-            pose_colmap = convert_coordinate(source_pose, reference_pose, index_of_cubemap=ind, new_angle = new_angle)
-            save_pose(para_folder, pose_colmap, image_index, image_name, camera_id)
+            score_list.append(score)
+            
+            if (not select_view) or (score is not None):
+            # if no need to select view or the score of the selected view is not None
+                # save the view
+                image_path = cubemap_obj.save_cubemap(path = view_folder, prefix = prefix, index=[ind])   
+                image_name = image_path[0].split('/')[-1]
+            
+                # TODO: support images taken by different camera models
+                
+                # save parameters
+                camera_parameters = [resolution[0]/2, resolution[1]/2, resolution[0]/2, resolution[1]/2]
+                if camera_txt_flag or ( not os.path.exists(os.path.join(para_folder, 'cameras.txt')) ):
+                # if there is no parameter file or 
+                    camera_id = create_camera_model(path=para_folder, camera_para = [camera_parameters], camera_size=resolution)
+                    save_3d_points(para_folder)
+                    
+                    # only write once
+                    camera_txt_flag = False
+                else:
+                    camera_id = 1
+                
+                # save poses
+                source_pose = [cam.rotation_mtx, cam.translation_vec]
+                pose_colmap = convert_coordinate(source_pose, reference_pose, index_of_cubemap=ind, new_angle = new_angle)
+                save_pose(para_folder, pose_colmap, image_index, image_name, camera_id)  
+        
+    return score_list, camera_txt_flag
 
 
 def convert_coordinate(source_pose: list, reference_pose: list, index_of_cubemap: int, new_angle: tuple=None):
@@ -677,7 +771,6 @@ def reconstruct_omni_maps(omni_workspace: str, Camera_parameter: list = None, vi
     return depth_list
         
 
-
 def project_colmap_maps(path: str, view_name: str = None, views_list: list = [],
                          output_resolution: tuple=None, use_radial_dist: bool = False,
                          camera_para: list=None, map_type: str="depth_maps", save: bool = True) -> np.array:
@@ -913,3 +1006,4 @@ def evaluate(estimation: np.array, GT: np.array, checking_line: int = 100, save:
         plt.savefig('Error_maps.png', dpi=300, bbox_inches="tight")
 
     return raw_RMSE
+

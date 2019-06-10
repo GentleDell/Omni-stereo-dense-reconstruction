@@ -12,12 +12,21 @@ import numpy as np
 from cam360 import Cam360
 from cubicmaps import CubicMaps
 
+# thresholds to sort candidate views
+MIN_OVERLAPPING = 30
+MIN_TRIANGULATION = 6*np.pi/180
+
+
 def view_selection(cam:Cam360, reference:np.array, initial_pose: tuple, fov: tuple=(np.pi/2, np.pi/2),
                    max_iter: int=10, use_filter: bool=True, threshold: float=5.0):
     '''
-        It selects the view that maximize the overlapping between the referece 
-        image and the source view projected from the given cam360 obj. \n
-        
+        It selects a view together with its score that satisfies two criterions:
+            1. sharing the maximum overlapping between the referece image and 
+               the source view projected from the given cam360 obj. (measured
+               by the number of matches and must be greater than a threshold) \n
+            2. the trangulation angle must be greater than a threshold, otherwise 
+               the socre of this view will have a low score.
+               
         Similar to the colmap, sparse features are used to select views. At each loop: \n
         1. Features in the reference image and the source view are detected and matched. 
         2. For features in each view (two views in total at each loop), the centroid
@@ -90,8 +99,10 @@ def view_selection(cam:Cam360, reference:np.array, initial_pose: tuple, fov: tup
         if use_filter:
             matches = filter_matches(kp1, kp2, matches)
         if len(matches) <= 10:
-            warnings.warn("Can not find enough inlier matches")
-            return None, None
+            theta, phi = None, None
+            pose = (np.random.uniform(low=0, high=2*np.pi), np.random.uniform(low=0, high=np.pi))
+            warnings.warn("Can not find enough inlier matches; start random searching")
+            continue
         
         # calculate the distance between centroids
         centroid_dist = feature_centroid_distance(kp1, kp2, matches, source_gray.shape)
@@ -113,8 +124,18 @@ def view_selection(cam:Cam360, reference:np.array, initial_pose: tuple, fov: tup
                 theta = 2*np.pi - theta
         
             pose = (np.asscalar(phi), np.asscalar(theta))
-            
-    return source, pose    
+   
+    # calculate the score of the selected view
+    angle = convert_angle(theta, phi, initial_pose)
+    if angle is not None:
+        score_overlapping = 1 - ((min(len(matches), MIN_OVERLAPPING) - MIN_OVERLAPPING)**2)/(MIN_OVERLAPPING**2)
+        score_triangulation = 1 - ((min(angle, MIN_TRIANGULATION) - MIN_TRIANGULATION)**2)/(MIN_TRIANGULATION**2)
+        score = score_overlapping + score_triangulation
+    else:
+        print("Fail to find valid views")
+        source, pose, score = None, None, None
+    
+    return source, pose, score
 
 
 def filter_matches(kp1, kp2, matches):
@@ -152,3 +173,21 @@ def feature_centroid_distance(kp1, kp2, matches, image_size):
     src_centroid = np.average(src_features, weights = weight, axis = 0)
     
     return ref_centroid - src_centroid
+
+
+def convert_angle(theta: float, phi: float, initial_pose: list):
+    '''
+        It converts delta_theta and delta_phi to the angle between the two 
+    '''
+    if theta is None or phi is None:
+        angle = None
+    else:
+        phi = phi - initial_pose[0]
+        theta = theta - initial_pose[1]
+        
+        z = np.tan(np.abs(theta))/np.cos(phi)
+        h = np.tan(np.abs(phi))
+        
+        angle = np.asscalar(np.arctan( np.sqrt(z**2 + h**2) ))
+    
+    return angle
