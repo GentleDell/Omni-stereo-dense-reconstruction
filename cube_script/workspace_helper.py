@@ -6,7 +6,6 @@ Created on Fri Apr  19 18:39:57 2019
 @author: zhantao
 """
 import os
-import re
 import sys
 import glob
 import warnings
@@ -91,13 +90,21 @@ def dense_from_cam360list(cam360_list: list, workspace: str, patchmatch_path: st
             The number of views (4 or 6) to synthesis the omnidirectional depthmap. 
             4 means the sky and ground will be neglected.        
     """
-    for cnt in range(len(cam360_list)):
+    if use_view_selection:
+        for cnt in range(len(cam360_list)):
+            cam360_list = estimate_dense_depth(cam360_list, 
+                                               reference_image = cnt,
+                                               workspace = workspace,
+                                               patchmatch_path = patchmatch_path, 
+                                               views_for_synthesis = views_for_synthesis,
+                                               use_view_selection = True)
+    else:
         cam360_list = estimate_dense_depth(cam360_list, 
-                                           reference_image = cnt,
+                                           reference_image = np.round(len(cam360_list)/2).astype(int),
                                            workspace = workspace,
                                            patchmatch_path = patchmatch_path, 
                                            views_for_synthesis = views_for_synthesis,
-                                           use_view_selection = use_view_selection)
+                                           use_view_selection = False)
     
 
 def estimate_dense_depth(cam360_list: list, reference_image: int, workspace: str, patchmatch_path: str, 
@@ -198,10 +205,14 @@ def estimate_dense_depth(cam360_list: list, reference_image: int, workspace: str
                                        maps_type='cost_maps',
                                        resolution=resolution)
     
-
-    # save costs and depth of the reference image to the corresponding object
-    cam360_list[reference_image].depth(depth_list[reference_image])
-    cam360_list[reference_image].cost(cost_list[reference_image])
+    if use_view_selection:
+        # save costs and depth of the reference image to the corresponding object
+        cam360_list[reference_image].depth(depth_list[reference_image])
+        cam360_list[reference_image].cost(cost_list[reference_image])
+    else:
+        for ind, cam in enumerate(cam360_list):
+            cam.depth(depth_list[ind])
+            cam.cost(cost_list[ind])
        
     return cam360_list
 
@@ -228,7 +239,6 @@ def set_patchmatch_cfg(workspace: str, reference_image: int, score_list: list,
             
         view_ind : int
             The index of the current cubic view. Smaller or equal to views_for_synthesis. 
-            
     '''
     # define paths
     path_to_images = os.path.join(workspace, 'images/*')
@@ -236,33 +246,50 @@ def set_patchmatch_cfg(workspace: str, reference_image: int, score_list: list,
     
     # obtain all image names (except for the reference image) and 
     # create a dictionary for images and corresponding valid scores
-    image_list = [ image.split('/')[-1] for image in sorted(glob.glob(path_to_images)) if "_{:d}_".format(reference_image+1) not in image ]
+    src_image = [ image.split('/')[-1] for image in sorted(glob.glob(path_to_images)) if "_{:d}_".format(reference_image+1) not in image ]
     
     if enable_view_selection:
         # load valid score
         valid_scores = [score[view_ind] for score in score_list if score[view_ind] is not None]
     else:
         # set scores for images 
-        valid_scores = [0]*len(image_list)
+        valid_scores = [0]*len(src_image)
 
-    assert len(image_list) == len(valid_scores), "The number of valid images does not match the number of scores"
-    image_score_dict = dict(zip(image_list, valid_scores))
+    assert len(src_image) == len(valid_scores), "The number of valid images does not match the number of scores"
+    image_score_dict = dict(zip(src_image, valid_scores))
     
     # keep the top N views
-    sort_image = sorted(image_score_dict.items(), key=lambda item:item[1], reverse=True)[:BEST_OF_N_VIEWS]
+    top_n_candidates = sorted(image_score_dict.items(), key=lambda item:item[1], reverse=True)[:BEST_OF_N_VIEWS]
     
     # set the config file
     with open(path_to_config, 'r') as file:
         config = file.read()
     
-    config = "cam360_{:d}_view{:d}.png\n".format(reference_image+1, view_ind)
-    src_img = [ image[0]+', ' for image in sort_image]
-    config = config + "".join(src_img)[:-2]
+    reference = "cam360_{:d}_view{:d}.png".format(reference_image+1, view_ind)
+    source = [ image[0] for image in top_n_candidates]
+    config = generate_config(ref=reference, src=source)
     
     with open(path_to_config, 'w') as file:
         file.write(config)
         
+
+def generate_config(ref: str, src: list):
+    '''
+        It generates configuration contents.
+    '''
+    config = ""
+    for cnt in range(len(src) + 1):
         
+        new_task = ref + "\n"
+        src_img = [ image +', ' for image in src]
+        config = config + new_task + "".join(src_img)[:-2] + "\n"
+        
+        src.append(ref)
+        ref = src[0]
+        src = src[1:]
+        
+    return config
+    
 def check_path_exist(path: str):
     '''
         If the given path does not exist, it will create the path.
