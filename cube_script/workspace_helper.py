@@ -211,8 +211,8 @@ def estimate_dense_depth(cam360_list: list, reference_image: int, workspace: str
         cam360_list[reference_image].cost(cost_list[reference_image])
     else:
         for ind, cam in enumerate(cam360_list):
-            cam.depth(depth_list[ind])
-            cam.cost(cost_list[ind])
+            cam.depth = depth_list[ind][:,:,0]
+            cam.cost = cost_list[ind][:,:,0]
        
     return cam360_list
 
