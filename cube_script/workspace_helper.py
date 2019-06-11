@@ -10,7 +10,7 @@ import sys
 import glob
 import warnings
 import subprocess
-from shutil import copyfile
+from shutil import copyfile, rmtree
 from typing import Optional
 
 import cv2
@@ -207,8 +207,10 @@ def estimate_dense_depth(cam360_list: list, reference_image: int, workspace: str
     
     if use_view_selection:
         # save costs and depth of the reference image to the corresponding object
-        cam360_list[reference_image].depth(depth_list[reference_image])
-        cam360_list[reference_image].cost(cost_list[reference_image])
+        cam360_list[reference_image].depth = depth_list[reference_image]
+        cam360_list[reference_image].cost = cost_list[reference_image]
+        # clean workspace
+        rmtree(workspace) 
     else:
         for ind, cam in enumerate(cam360_list):
             cam.depth = depth_list[ind][:,:,0]
