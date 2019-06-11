@@ -162,25 +162,25 @@ def estimate_dense_depth(cam360_list: list, reference_image: int, workspace: str
         check_path_exist(output_path)
         
         if use_colmap:
-            command = patchmatch_path + \
-                      " image_undistorter" + \
-                      " --image_path="  + image_path + \
-                      " --input_path="  + input_path + \
-                      " --output_path=" + output_path
-            CM = subprocess.Popen(command, shell=True)
-            CM.wait()
+#            command = patchmatch_path + \
+#                      " image_undistorter" + \
+#                      " --image_path="  + image_path + \
+#                      " --input_path="  + input_path + \
+#                      " --output_path=" + output_path
+#            CM = subprocess.Popen(command, shell=True)
+#            CM.wait()
             
             # modify the patch-match.cfg file to set number of source image or 
             # specify the images to be used
-            set_patchmatch_cfg(output_path, reference_image, scores_list, view)
+            set_patchmatch_cfg(output_path, reference_image, scores_list, view, use_view_selection)
             
-            command = patchmatch_path + \
-                      " patch_match_stereo" + \
-                      " --workspace_path="  + output_path + \
-                      " --PatchMatchStereo.depth_min=10"  + \
-                      " --PatchMatchStereo.depth_max=500"
-            CM = subprocess.Popen(command, shell=True)
-            CM.wait()
+#            command = patchmatch_path + \
+#                      " patch_match_stereo" + \
+#                      " --workspace_path="  + output_path + \
+#                      " --PatchMatchStereo.depth_min=10"  + \
+#                      " --PatchMatchStereo.depth_max=500"
+#            CM = subprocess.Popen(command, shell=True)
+#            CM.wait()
             
         else:
             command = patchmatch_path +\
@@ -217,7 +217,8 @@ def estimate_dense_depth(cam360_list: list, reference_image: int, workspace: str
     return cam360_list
 
 
-def set_patchmatch_cfg(workspace: str, reference_image: int, score_list: list, view_ind : int):
+def set_patchmatch_cfg(workspace: str, reference_image: int, score_list: list, 
+                       view_ind : int, enable_view_selection: bool):
     '''
         It keeps the top BEST_OF_N_VIEWS views to reconstruct scenes according
         to the given scores. To reduce computation cost, it only reconstruct 
@@ -247,7 +248,14 @@ def set_patchmatch_cfg(workspace: str, reference_image: int, score_list: list, v
     # obtain all image names (except for the reference image) and 
     # create a dictionary for images and corresponding valid scores
     image_list = [ image.split('/')[-1] for image in sorted(glob.glob(path_to_images)) if "_{:d}_".format(reference_image+1) not in image ]
-    valid_scores = [score[view_ind] for score in score_list if score[view_ind] is not None]
+    
+    if enable_view_selection:
+        # load valid score
+        valid_scores = [score[view_ind] for score in score_list if score[view_ind] is not None]
+    else:
+        # set scores for images 
+        valid_scores = [0]*len(image_list)
+
     assert len(image_list) == len(valid_scores), "The number of valid images does not match the number of scores"
     image_score_dict = dict(zip(image_list, valid_scores))
     
