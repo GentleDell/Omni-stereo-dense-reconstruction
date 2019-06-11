@@ -22,9 +22,6 @@ parser.add_argument("--patchmatch_path",  type=str,  default='../colmap', help="
 
 parser.add_argument("--workspace"      ,  type=str,  default='../data_demo/workspace',  help="Where to store the workspace") 
 
-parser.add_argument("--use_colmap"         , default=False, action='store_true', help="Use orignal colmap or the modified PatchMatchingStereoGPU " + 
-                                                                                      "adapted from colmap") 
-
 parser.add_argument("--use_view_selection" , default=False, action='store_true', help="Select views for dense reconstruction") 
 
 parser.add_argument("--views_for_synthesis",  type=int , default=4,  help="The number of views to synthesize the 360 depthmap; only 4 and 6 are supported") 
@@ -78,7 +75,6 @@ def main():
                                         workspace = args.workspace,
                                         patchmatch_path = args.patchmatch_path, 
                                         views_for_synthesis = args.views_for_synthesis,
-                                        use_colmap = args.use_colmap,
                                         use_view_selection = args.use_view_selection)
 
 
