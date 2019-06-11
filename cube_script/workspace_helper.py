@@ -162,25 +162,25 @@ def estimate_dense_depth(cam360_list: list, reference_image: int, workspace: str
         check_path_exist(output_path)
         
         if use_colmap:
-#            command = patchmatch_path + \
-#                      " image_undistorter" + \
-#                      " --image_path="  + image_path + \
-#                      " --input_path="  + input_path + \
-#                      " --output_path=" + output_path
-#            CM = subprocess.Popen(command, shell=True)
-#            CM.wait()
+            command = patchmatch_path + \
+                      " image_undistorter" + \
+                      " --image_path="  + image_path + \
+                      " --input_path="  + input_path + \
+                      " --output_path=" + output_path
+            CM = subprocess.Popen(command, shell=True)
+            CM.wait()
             
             # modify the patch-match.cfg file to set number of source image or 
             # specify the images to be used
             set_patchmatch_cfg(output_path, reference_image, scores_list, view)
             
-#            command = patchmatch_path + \
-#                      " patch_match_stereo" + \
-#                      " --workspace_path="  + output_path + \
-#                      " --PatchMatchStereo.depth_min=10"  + \
-#                      " --PatchMatchStereo.depth_max=500"
-#            CM = subprocess.Popen(command, shell=True)
-#            CM.wait()
+            command = patchmatch_path + \
+                      " patch_match_stereo" + \
+                      " --workspace_path="  + output_path + \
+                      " --PatchMatchStereo.depth_min=10"  + \
+                      " --PatchMatchStereo.depth_max=500"
+            CM = subprocess.Popen(command, shell=True)
+            CM.wait()
             
         else:
             command = patchmatch_path +\
