@@ -1983,7 +1983,6 @@ int ShowHelp(
 int main(int argc, char** argv) {
 
 /* Modified by Zhantao Deng @ epfl, 2019
- * This version only preserves the patch matching stereo GPU in main()
  * Changelog:
  *      1. default camera model  : SIMPLE_RADIAL -->  SIMPLE_PINHOLE      @ image_reader.h
  *      2. default view selection: __auto__,30   -->   __all__            @ undistortion.cc
@@ -1997,44 +1996,80 @@ int main(int argc, char** argv) {
  * all changes are marked by "// added by zhantao.deng@epfl"
  */
 
-    colmap::InitializeGlog(argv);
+    InitializeGlog(argv);
 
-    char* argv_2[2];
-    std::string input_path;
-    std::string output_path;
+    std::vector<std::pair<std::string, command_func_t>> commands;
+    commands.emplace_back("gui", &RunGraphicalUserInterface);
+    commands.emplace_back("automatic_reconstructor", &RunAutomaticReconstructor);
+    commands.emplace_back("bundle_adjuster", &RunBundleAdjuster);
+    commands.emplace_back("color_extractor", &RunColorExtractor);
+    commands.emplace_back("database_creator", &RunDatabaseCreator);
+    commands.emplace_back("delaunay_mesher", &RunDelaunayMesher);
+    commands.emplace_back("exhaustive_matcher", &RunExhaustiveMatcher);
+    commands.emplace_back("feature_extractor", &RunFeatureExtractor);
+    commands.emplace_back("feature_importer", &RunFeatureImporter);
+    commands.emplace_back("hierarchical_mapper", &RunHierarchicalMapper);
+    commands.emplace_back("image_deleter", &RunImageDeleter);
+    commands.emplace_back("image_filterer", &RunImageFilterer);
+    commands.emplace_back("image_rectifier", &RunImageRectifier);
+    commands.emplace_back("image_registrator", &RunImageRegistrator);
+    commands.emplace_back("image_undistorter", &RunImageUndistorter);
+    commands.emplace_back("mapper", &RunMapper);
+    commands.emplace_back("matches_importer", &RunMatchesImporter);
+    commands.emplace_back("model_aligner", &RunModelAligner);
+    commands.emplace_back("model_analyzer", &RunModelAnalyzer);
+    commands.emplace_back("model_converter", &RunModelConverter);
+    commands.emplace_back("model_merger", &RunModelMerger);
+    commands.emplace_back("model_orientation_aligner",
+                        &RunModelOrientationAligner);
+    commands.emplace_back("patch_match_stereo", &RunPatchMatchStereo);
+    commands.emplace_back("point_filtering", &RunPointFiltering);
+    commands.emplace_back("point_triangulator", &RunPointTriangulator);
+    commands.emplace_back("poisson_mesher", &RunPoissonMesher);
+    commands.emplace_back("project_generator", &RunProjectGenerator);
+    commands.emplace_back("rig_bundle_adjuster", &RunRigBundleAdjuster);
+    commands.emplace_back("sequential_matcher", &RunSequentialMatcher);
+    commands.emplace_back("spatial_matcher", &RunSpatialMatcher);
+    commands.emplace_back("stereo_fusion", &RunStereoFuser);
+    commands.emplace_back("transitive_matcher", &RunTransitiveMatcher);
+    commands.emplace_back("vocab_tree_builder", &RunVocabTreeBuilder);
+    commands.emplace_back("vocab_tree_matcher", &RunVocabTreeMatcher);
+    commands.emplace_back("vocab_tree_retriever", &RunVocabTreeRetriever);
 
-    colmap::OptionManager options;
-    options.AddRequiredOption("input_path", &input_path);
-    options.AddRequiredOption("output_path", &output_path);
-
-    // manually conduct undistortion and PM stereo
-    RunImageUndistorter(argc, argv);
-
-    // generate --workspace_path from the given --output_path
-    size_t found;
-    std::string workspace = "--workspace_path",
-                pattern = "--output_path";
-
-    for (int i = 0; i<argc; i ++)
+    if (argc == 1)
     {
-        std::string temp_string(argv[i]), path;
-        found = temp_string.find(pattern);
+        return ShowHelp(commands);
+    }
 
-        if (found != std::string::npos){
-            path = temp_string.substr(found + pattern.length());
-
-            argv_2[0] = argv[0];
-            argv_2[1] = (char*) workspace.append(path).c_str();
-
-            argc = 2;
+    const std::string command = argv[1];
+    if (command == "help" || command == "-h" || command == "--help")
+    {
+        return ShowHelp(commands);
+    }
+    else
+    {
+        command_func_t matched_command_func = nullptr;
+        for (const auto& command_func : commands) {
+          if (command == command_func.first) {
+            matched_command_func = command_func.second;
             break;
+          }
+        }
+        if (matched_command_func == nullptr) {
+          std::cerr << StringPrintf(
+                           "ERROR: Command `%s` not recognized. To list the "
+                           "available commands, run `colmap help`.",
+                           command.c_str())
+                    << std::endl;
+          return EXIT_FAILURE;
+        }
+        else {
+          int command_argc = argc - 1;
+          char** command_argv = &argv[1];
+          command_argv[0] = argv[0];
+          return matched_command_func(command_argc, command_argv);
         }
     }
 
-    // execute the patch match GPU
-    RunPatchMatchStereo(argc, argv_2);
-
-    std::cout << colmap::StringPrintf("PatchMatchStereo Successfully finished!") << std::endl;
-
-    return EXIT_SUCCESS;
+    return ShowHelp(commands);
 }
