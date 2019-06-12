@@ -207,8 +207,8 @@ def estimate_dense_depth(cam360_list: list, reference_image: int, workspace: str
     
     if use_view_selection:
         # save costs and depth of the reference image to the corresponding object
-        cam360_list[reference_image].depth = depth_list[reference_image]
-        cam360_list[reference_image].cost = cost_list[reference_image]
+        cam360_list[reference_image].depth = depth_list[reference_image][:,:,0]
+        cam360_list[reference_image].cost = cost_list[reference_image][:,:,0]
         # clean workspace
         rmtree(workspace) 
     else:
