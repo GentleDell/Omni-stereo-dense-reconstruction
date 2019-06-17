@@ -69,8 +69,8 @@ VIEW_ROT = np.array([[[-1,0,0], [0,0,-1], [0,-1,0]],
 BEST_OF_N_VIEWS = 10
 
 
-def dense_from_cam360list(cam360_list: list, workspace: str, patchmatch_path: str, views_for_synthesis: int=4,
-                          use_view_selection: bool=False):
+def dense_from_cam360list(cam360_list: list, workspace: str, patchmatch_path: str, reference_view: int,
+                          views_for_synthesis: int=4, use_view_selection: bool=False, gpu_index: int=-1):
     """
         Given a list of cam360 objects, it calls 'estimate_dense_depth' to estimate 
         depth for all cam360 objects in the list.
@@ -86,29 +86,43 @@ def dense_from_cam360list(cam360_list: list, workspace: str, patchmatch_path: st
         patchmatch_path: str
             Where to find the executable patch matching stereo GPU file. 
             
+        reference_view: int
+            The index of the reference view. Only works when view selection is disabled;
+            
         views_for_synthesis: int
             The number of views (4 or 6) to synthesis the omnidirectional depthmap. 
-            4 means the sky and ground will be neglected.        
+            4 means the sky and ground will be neglected.      
+        
+        use_view_selection: bool
+            Enable view selection.
+            
+        gpu_index: int
+            The index of GPU to run the Patch Matching.
     """
     if use_view_selection:
+        # if enable view selection, reconstruct view by view
         for cnt in range(len(cam360_list)):
             cam360_list = estimate_dense_depth(cam360_list, 
                                                reference_image = cnt,
                                                workspace = workspace,
                                                patchmatch_path = patchmatch_path, 
                                                views_for_synthesis = views_for_synthesis,
-                                               use_view_selection = True)
+                                               use_view_selection = True,
+                                               gpu_index = gpu_index)
     else:
+        # if disabled view selection, reconstruct all views together
         cam360_list = estimate_dense_depth(cam360_list, 
-                                           reference_image = np.round(len(cam360_list)/2).astype(int),
+                                           reference_image = reference_view,
                                            workspace = workspace,
                                            patchmatch_path = patchmatch_path, 
                                            views_for_synthesis = views_for_synthesis,
-                                           use_view_selection = False)
-    
+                                           use_view_selection = False,
+                                           gpu_index = gpu_index)    
+    return cam360_list
+
 
 def estimate_dense_depth(cam360_list: list, reference_image: int, workspace: str, patchmatch_path: str, 
-                          views_for_synthesis: int=4, use_view_selection: bool=False):
+                          views_for_synthesis: int=4, use_view_selection: bool=False, gpu_index: int=-1):
     """
         Given a list of cam360 objects, it estimates depthmap for the reference image.
     
@@ -143,6 +157,12 @@ def estimate_dense_depth(cam360_list: list, reference_image: int, workspace: str
         views_for_synthesis: int
             The number of views (4 or 6) to synthesis the omnidirectional depthmap. 
             4 means the sky and ground will be neglected.
+            
+        use_view_selection: bool
+            Enable view selection.
+            
+        gpu_index: int
+            The index of GPU to run the Patch Matching.
         
         Examples
         --------
@@ -181,8 +201,9 @@ def estimate_dense_depth(cam360_list: list, reference_image: int, workspace: str
         command = patchmatch_path + \
                   " patch_match_stereo" + \
                   " --workspace_path="  + output_path + \
-                  " --PatchMatchStereo.depth_min=10"  + \
-                  " --PatchMatchStereo.depth_max=500"
+                  " --PatchMatchStereo.depth_min=0"  + \
+                  " --PatchMatchStereo.depth_max=500" + \
+                  " --PatchMatchStereo.gpu_index={:d}".format(gpu_index) 
         CM = subprocess.Popen(command, shell=True)
         CM.wait()
 
@@ -209,9 +230,10 @@ def estimate_dense_depth(cam360_list: list, reference_image: int, workspace: str
         # save costs and depth of the reference image to the corresponding object
         cam360_list[reference_image].depth = depth_list[reference_image][:,:,0]
         cam360_list[reference_image].cost = cost_list[reference_image][:,:,0]
-        # clean workspace
-        rmtree(workspace) 
+        
+        rmtree(output_path)     # clean workspace
     else:
+        # save all views at a time
         for ind, cam in enumerate(cam360_list):
             cam.depth = depth_list[ind][:,:,0]
             cam.cost = cost_list[ind][:,:,0]
@@ -242,7 +264,6 @@ def set_patchmatch_cfg(workspace: str, reference_image: int, score_list: list,
         view_ind : int
             The index of the current cubic view. Smaller or equal to views_for_synthesis. 
     '''
-    # define paths
     path_to_images = os.path.join(workspace, 'images/*')
     path_to_config = os.path.join(workspace, 'stereo/patch-match.cfg')
     
@@ -251,11 +272,9 @@ def set_patchmatch_cfg(workspace: str, reference_image: int, score_list: list,
     src_image = [ image.split('/')[-1] for image in sorted(glob.glob(path_to_images)) if "_{:d}_".format(reference_image+1) not in image ]
     
     if enable_view_selection:
-        # load valid score
-        valid_scores = [score[view_ind] for score in score_list if score[view_ind] is not None]
+        valid_scores = [score[view_ind] for score in score_list if score[view_ind] is not None]     # load valid scores
     else:
-        # set scores for images 
-        valid_scores = [0]*len(src_image)
+        valid_scores = [0]*len(src_image)       # set scores for images 
 
     assert len(src_image) == len(valid_scores), "The number of valid images does not match the number of scores"
     image_score_dict = dict(zip(src_image, valid_scores))
@@ -263,7 +282,14 @@ def set_patchmatch_cfg(workspace: str, reference_image: int, score_list: list,
     # keep the top N views
     top_n_candidates = sorted(image_score_dict.items(), key=lambda item:item[1], reverse=True)[:BEST_OF_N_VIEWS]
     
-    # set the config file
+    # Generate configuration file, e.g.
+    #   ref_image
+    #   src_image1, src_image2, ... ,src_imageN
+    #   src_image1
+    #   src_image2, src_image3, ... ,src_imageN, ref_image
+    #   ...
+    #   src_imageN
+    #   ref_image, src_image1, src_image2, ... ,src_imageN-1
     with open(path_to_config, 'r') as file:
         config = file.read()
     

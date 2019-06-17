@@ -7,6 +7,7 @@ Created on Thu May 23 15:33:28 2019
 """
 import os
 import glob
+import pickle # for synthesis
 import argparse
 
 import cv2 
@@ -22,9 +23,13 @@ parser.add_argument("--patchmatch_path",  type=str,  default='../colmap', help="
 
 parser.add_argument("--workspace"      ,  type=str,  default='../data_demo/workspace',  help="Where to store the workspace") 
 
-parser.add_argument("--use_view_selection" , default=False, action='store_true', help="Select views for dense reconstruction") 
+parser.add_argument("--reference_view",  type=int , default=4,  help="The index of the reference view. Only works when view_selection is disabled.") 
+
+parser.add_argument("--view_selection" , default=True, action='store_true', help="Select views for dense reconstruction") 
 
 parser.add_argument("--views_for_synthesis",  type=int , default=4,  help="The number of views to synthesize the 360 depthmap; only 4 and 6 are supported") 
+
+parser.add_argument("--gpu_index",  type=int , default=2,  help="The index of GPU to run the Patch Matching") 
 
 parser.add_argument("--pose_list"      ,  nargs='+', default=['4'],  help="A list of pose corresponding to the images") 
 
@@ -74,8 +79,15 @@ def main():
     cam360_list = dense_from_cam360list(cam360_list, 
                                         workspace = args.workspace,
                                         patchmatch_path = args.patchmatch_path, 
+                                        reference_view  = args.reference_view,
                                         views_for_synthesis = args.views_for_synthesis,
-                                        use_view_selection = args.use_view_selection)
+                                        use_view_selection  = args.view_selection,
+                                        gpu_index = args.gpu_index)
+    
+    # save data for view synthesis
+    pickle_out = open(os.path.join(args.workspace,"cam360.pickle"),"wb")
+    pickle.dump(cam360_list, pickle_out)
+    pickle_out.close()
 
 
 if __name__ == '__main__':

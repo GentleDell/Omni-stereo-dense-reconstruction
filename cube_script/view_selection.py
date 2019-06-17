@@ -13,6 +13,7 @@ from cam360 import Cam360
 from cubicmaps import CubicMaps
 
 # thresholds to sort candidate views
+MIN_NUM_FEATURE = 15
 MIN_OVERLAPPING = 30
 MIN_TRIANGULATION = 6*np.pi/180
 
@@ -98,7 +99,7 @@ def view_selection(cam:Cam360, reference:np.array, initial_pose: tuple, fov: tup
         # filtering outliers 
         if use_filter:
             matches = filter_matches(kp1, kp2, matches)
-        if len(matches) <= 10:
+        if len(matches) <= MIN_NUM_FEATURE:
             theta, phi = None, None
             pose = (np.random.uniform(low=0, high=2*np.pi), np.random.uniform(low=0, high=np.pi))
             warnings.warn("Can not find enough inlier matches; start random searching")
