@@ -18,7 +18,7 @@ from skimage.filters import median
 from skimage.morphology import disk
 from skimage.restoration import denoise_tv_chambolle
 
-_SYN_METHODS_  = ['easy', 'sort', 'tv', 'median'] 
+_SYN_METHODS_  = ['simple', 'sort', 'tv', 'median'] 
 
 _WEIGHT_COSTS_  = 0.25
 _WEIGHT_CENTER_ = 0.5
@@ -29,67 +29,148 @@ _COST_DEFINITION_ = 0   # 0: 'Gaussian';
 
 
 def synthesize_view(cam360_list: list, rotation: np.array, translation: np.array, 
-                    resolution: tuple, method: str = 'sort', parameters: int = 3, with_depth = False): 
+                    resolution: tuple, method: str = 'sort', parameters: float = 3.0, 
+                    with_depth: bool = False): 
     
     '''
-        Given a list of cam360_list, it synthesize a new view at the given pose with 
+        Given a list of cam360 objects, it synthesize a new view at the given pose with 
         the given resolution. 
+        
+        Firstly, it projects all pixels of given views to the synthesis view. Then it
+        computes costs for candidates of each pixel and sort them with their costs.
+        
+        After the projection and aggregation, it filters outliers using the required
+        methods. Finally, It gets txetures for the rest pixels.
+        
+        Parameters
+        ----------  
+        cam360_list: list
+            source views for synthesis
+            
+        rotation: np.array
+            rotation of the target view
+        
+        translation: np.array
+            translation of the target view
+        
+        resolution: tuple
+            resolution of the target view
+        
+        method: str
+            filtering method to be used
+            
+        parameters: float
+            parameters to be used in filters
+            
+        with_depth: bool
+            whether to output depth map for the target view
     '''
     
-#    print("projecting pixels of original views to the synthesized view ...")
-#    projected_view = project_to_view(cam360_list, rotation, translation, resolution)
-#    
-#    print("computing the cost and aggregating pixels ...")
-#    pixels = aggregate_pixels(projected_view, resolution)
+    print("projecting pixels of original views to the synthesized view ...")
+    projected_view = project_to_view(cam360_list, rotation, translation, resolution)
     
-    pickle_in = open("temp.pickle","rb")
-    pixels = pickle.load(pickle_in)
+    print("computing the cost and aggregating pixels ...")
+    pixels = aggregate_pixels(projected_view, resolution)
+    
+    # for testing
+#    pickle_in = open("temp.pickle","rb")
+#    pixels = pickle.load(pickle_in)
     
     print("conducting optimization ...")
     Syn_pixels = pixel_filter(pixels, resolution, method, parameter=parameters)
     
     print("generating texture ...")
-    texture = get_texture(Syn_pixels[:,[0,1,4,5]], cam360_list, resolution)
+    texture = get_texture(Syn_pixels[:,[0,1,4,5]], cam360_list, resolution, with_depth)
     
     return texture
 
 
 def pixel_filter(pixels: np.array, resolution: tuple, method: str, parameter: float):
+    '''
+        It filters out outliers using the required methods. Npw, 4 methods are 
+        supported: 'simple', 'sort', 'tv', 'median'.
         
+        'simple' keeps candidates from only one view and the view is set by 
+        'parameter'.
+        
+        'sort' sorts all candidates according to their costs and keeps candidates
+         having the smallest costs.
+
+        'tv' and 'median' fiter on indices map. They treat the change of indices 
+         as noises. So, for a patch on the synthesis view, these two filters tend 
+         to use the texture from the same view. 
+         
+        Parameters
+        ----------  
+        pixels: np.array
+            all candidates, each row contains:
+                [nth_row_in_Syn, nth_col_in_Syn, depth, cost, 1D_coordinate_in_srcview, index_of_srcview]
+                srcview means the view where this candidate comes from
+        
+        resolution: tuple
+            resolution of the target view
+            
+        method: str
+            filtering method to be used, including ['simple', 'sort', 'tv', 'median'] 
+        
+        parameters: float
+            parameters to be used in filters.
+                'simple' -- the src view to synthesize the view
+                'sort'   -- None
+                'tv'     -- lambda
+                'median' -- size of the sliding window] 
+    '''
+    # verify the required method
     try:
         method_ind = _SYN_METHODS_.index(method.lower())
     except:
         warnings.warn('{:s} is not supported now; use "sort" to synthesize the view'.format(method))
         method_ind = 1
     
-    if method_ind == 0:
-        parameter = np.clip(np.round(parameter), pixels[:,-1].min(), pixels[:,-1].max())
+    if method_ind == 0:     # method:'simple'
+        parameter = np.clip(np.round(parameter), pixels[:,-1].min(), pixels[:,-1].max())    # deal with invalid value
         Syn_pixels = pixels[pixels[:,5] == parameter,:]
     
     else:
         diff_ind = compute_diff(pixels[:,:2])
         top_pixels = pixels[diff_ind, :]
         
-        if method_ind == 1:
+        if method_ind == 1:      # method:'sort'
             Syn_pixels = top_pixels
         else:
-            
+            # to use median filter or total variation filter, getting the indices map at first
             indice_image = -1 * np.ones(resolution)
             indice_image[top_pixels[:,0].astype(int), top_pixels[:,1].astype(int)] = top_pixels[:,5]
         
-            if method_ind == 2:
+            if method_ind == 2:     # method:'tv'
                 filtered_indices = denoise_tv_chambolle(indice_image, weight = parameter)
                 
-            elif method_ind == 3:
+            elif method_ind == 3:   # method:'median'
                 filtered_indices = median(indice_image.astype(np.uint8), disk(parameter))
-    
+                
+            # synthesize the view
             Syn_pixels = verify_and_synthesize( filtered_indices, indice_image, pixels )
             
     return Syn_pixels
 
 
 def verify_and_synthesize( new_indices: np.array, original_indices: np.array, all_pixels: np.array ):
-    
+    '''
+        It verifies whether the filtered indices are reasonable. Then it converts 
+        verified indices to required formate.
+        [can be further accelerated using GPU]
+        
+        Parameters
+        ----------  
+        new_indices: np.array
+            the filtered indices
+            
+        original_indices: np.array
+            indices before filtering
+            
+        all_pixels: np.array
+            all candidates
+    '''
     
     # Verify the filtered indices are reasonable.
     #    
@@ -107,19 +188,18 @@ def verify_and_synthesize( new_indices: np.array, original_indices: np.array, al
     # convert the value (filtering will set -1 to be 255)
     new_indices = new_indices.astype(int)
     new_indices[new_indices == 255] = -1
-#    TODO: solve -1
     index_of_view = np.unique(all_pixels[:,-1])
     
     # count the number of candidates for every pixel and save it into a 3D matrix
     # together with information of the coordinates and view indices.
     keys, counts = np.unique(all_pixels[:, [0,1,5]], axis=0, return_counts=True)
-         # '+2' creates another layer to deal with -1 in line 124 (treated as 'the last element')
-         # '+1' works as well but it will slightly affact the verification process.
     compress_pix_cnt = np.zeros( new_indices.shape + (index_of_view.max().astype(int)+2,) )  
+         # '+2' creates another layer to deal with -1 for resume_flag (-1 is treated as 'the last element')
+         # '+1' works as well but it will slightly affect the verification process.
     compress_pix_cnt[keys[:,0].astype(int), keys[:,1].astype(int), keys[:,2].astype(int)] = counts
     
     # get the pixels whose view indices were changed during filtering; get the 
-    # corresponding new indices.
+    # corresponding indices.
     diff_row, diff_col = np.where(new_indices - original_indices != 0)
     diff_view_index = new_indices[diff_row, diff_col]
     
@@ -137,12 +217,12 @@ def verify_and_synthesize( new_indices: np.array, original_indices: np.array, al
     # 
     # Firstly, get pixel coordinate, raveled position and view index for all candidates.
     # As it is possible that for some pixels, there are many candidates from the same view
-    # and the number of the candidates is not fixed. Meawhile, it is complicate to create
-    # an variant-length array. So, we only keep the best candidates from each view for each
+    # and the number of the candidates is not fixed. Meanwhile, it is complicated to create
+    # a variant-length array. So, we only keep the best candidates from each view for each
     # pixel. 
     #
     # This is consistent with the original_indices, because it is generated by keeping
-    # the best cadidates for each pixel.
+    # the best cabdidate for each pixel.
     # 
     # Then, the view is synthesized by taking pixel coordinates, raveled positions and
     # view indices for all pixels of the synthesis view.
@@ -167,24 +247,80 @@ def verify_and_synthesize( new_indices: np.array, original_indices: np.array, al
     return Syn_pixels
 
 
-def get_texture(texture_index: np.array, cam360_list: list, resolution: tuple):
-    
+def get_texture(texture_index: np.array, cam360_list: list, resolution: tuple, with_depth: bool):
+    '''
+        It get textures and depthmap for the synthesis view from the given source
+        views.
+        
+        Parameters
+        ----------  
+        texture_index: np.array
+            the indices of textures of the synthesis view
+            format: [row of synthesis view,      (0 - resolution [0])
+                     column of synthesis view,   (0 - resolution [1])
+                     index of the source pixel,  (0 - resolution [0]*resolution [1])
+                     index of the view from which the source pixel is picked ]  [0 - len(cam360_list)]]
+        
+        cam360_list: list
+            source views for synthesis
+        
+        resolution: tuple
+            resolution of the target view
+            
+        with_depth: bool
+            whether to output depth map for the target view
+    '''
+    # initialize the synthesis view
     syn_view = np.zeros(resolution + (3,))
     
+    # for each view, to get texture/depth, the data are vecotorized at first. 
+    # Then the data corresponding to the texture_index are taken.
     for ind in range(len(cam360_list)):
         
         cam = cam360_list[ind]
         
-        pixel_index = texture_index[ texture_index[:,-1] == ind  ].astype(int)
+        pixel_index = texture_index[ texture_index[:,-1] == ind ].astype(int)
         cam_ravel = cam.texture.reshape([-1,3])
         
         syn_view[ pixel_index[:, 0], pixel_index[:, 1],: ] = cam_ravel[ pixel_index[:,2], : ]
+        
+    if with_depth:
+        # initialize the synthesis depth map
+        depth_view = np.zeros(resolution)
+        
+        for ind in range(len(cam360_list)):
+        
+            cam = cam360_list[ind]
+            
+            pixel_index = texture_index[ texture_index[:,-1] == ind  ].astype(int)
+            dep_ravel = cam.depth.reshape([-1])
+            
+            depth_view[ pixel_index[:, 0], pixel_index[:, 1] ] = dep_ravel[ pixel_index[:,2] ]
+        
+        return syn_view, depth_view
         
     return syn_view
 
 
 def project_to_view(cam360_list: list, rotation: np.array, translation: np.array, resolution: tuple):
-    
+    '''
+        It projects the given cam360 list to the view with the given pose and resolution.
+        
+        Parameters
+        ----------  
+        cam360_list: list
+            source views for synthesis
+            
+        rotation: np.array
+            rotation of the target view
+        
+        translation: np.array
+            translation of the target view
+        
+        resolution: tuple
+            resolution of the target view
+    '''
+    # initialize an array to store projections
     projections = np.empty((0, 6))
     for ind in range(len(cam360_list)): 
         
@@ -211,11 +347,17 @@ def project_to_view(cam360_list: list, rotation: np.array, translation: np.array
         theta_pix = theta_new *  resolution[0]/np.pi
         phi_pix   = phi_new * resolution[1]/(2*np.pi)
         
+        # compute a basic cost in this step to reduce computation in further steps.
+        # Here the basic costs include costs from colmap and the costs of distances
+        # between the projected points and the center of pixels [proportional to the
+        # distance between 3D points and rays from camera center to pixels centers]
         basic_cost= _WEIGHT_COSTS_  * cam.cost.reshape(-1) + \
                     _WEIGHT_CENTER_ * np.sqrt( (theta_pix - np.round(theta_pix))**2 + (phi_pix - np.round(phi_pix))**2 ) 
         
+        # the indices of pixels in raveled image
         pixel_ind = np.arange(0, cam._height * cam._width)
         
+        # the index of the view from which these pixels come
         view_ind  = ind*np.ones((cam._height * cam._width))
         
         projections = np.append(projections, np.stack((np.clip( np.round(theta_pix), 0, 511) ,  
@@ -224,9 +366,11 @@ def project_to_view(cam360_list: list, rotation: np.array, translation: np.array
                                                        basic_cost,
                                                        pixel_ind,
                                                        view_ind), axis = 1), axis = 0)
-        # all views are concatenated into a matrix of (res[0], num_view*res[1], 4) 
-        # where [:,:,:2] is the row and column of corresponding pixel in synthesis 
-        # view while [:,:,2] is the depth and [:,:,3] is the cost
+        # all views are concatenated into a matrix of (res[0], num_view*res[1], 6) 
+        # where [:,:,:2] is the index of row and column of corresponding pixel in 
+        # synthesis view; [:,:,2] is depth; [:,:,3] is cost; [:,:,4] is the index
+        # in the raveled source view, [:,:,5] is the index of view from which these
+        # pixels come.
     
     return projections 
 
@@ -243,12 +387,13 @@ def aggregate_pixels(projections: np.array, resolution: tuple):
         resolution: tuple
             Resolution of the synthesized view.
     '''
-    
+    # sort by the index of row and column
     sort_ind = np.lexsort( (projections[:,1], projections[:,0]) )
     projections = projections[sort_ind]
     
     projections[:,3] = compute_cost(projections[:,:4], resolution)
     
+    # sort by the index of row, column as well as costs
     sort_ind = np.lexsort( (projections[:,3], projections[:,1], projections[:,0]) )
     projections = projections[sort_ind]
 
@@ -256,7 +401,9 @@ def aggregate_pixels(projections: np.array, resolution: tuple):
 
 
 def compute_diff(coordinates: np.array):
-    
+    '''
+        It returns the index of difference on coordinates
+    '''
     row_ind = np.diff(coordinates[:,0]) > 0 
     col_ind = np.diff(coordinates[:,1]) > 0
     diff_ind = np.where( row_ind | col_ind )[0] + 1
@@ -271,26 +418,27 @@ def compute_cost(depth_cost_array: np.array, resolution: tuple):
         
         If there are many estimations, the cost will be computed with normal distribution 
         or the nearest depth, with a predifined weight.
-    '''
-    keys, counts = np.unique(depth_cost_array[:, [0,1,5]], axis=0, return_counts=True)
-    compress_pix_depth = np.zeros( resolution + (depth_cost_array[:,-1].max().astype(int)+1,) )  
-    compress_pix_depth[keys[:,0].astype(int), keys[:,1].astype(int), keys[:,2].astype(int)] = counts
-    
-    
-#    diff_ind = compute_diff(depth_cost_array[:,:2])
-#    valid_range = len(diff_ind)-1
-#    
-#
-#    for ind in range(valid_range):
-#        
-#        depth = depth_cost_array[ diff_ind[ind]:diff_ind[ind+1], 2]
-#        norm_depth = (depth - depth.mean())/(depth.var() + 1e-10)
-#        
-#        basic_cost = depth_cost_array[diff_ind[ind]:diff_ind[ind+1], 3]
-#        cost  = (_WEIGHT_DISTS_ * norm_depth + basic_cost) * _COST_DEFINITION_ \
-#               +(_WEIGHT_DISTS_ * np.abs(norm_depth) + basic_cost ) * (1 - _COST_DEFINITION_)
-#        
-#        depth_cost_array[diff_ind[ind]:diff_ind[ind+1], 3] = cost
+        
+        depth_cost_array: np.array
+            array containing coordinates [:, :2], depth[:, 3] and cost[:, 4]
+        resolution: tuple
+    '''    
+    # get the indices where coordinates change
+    diff_ind = compute_diff(depth_cost_array[:,:2])
+    valid_range = len(diff_ind)-1
+
+    # calculate the cost by group
+    for ind in range(valid_range):
+        
+        depth = depth_cost_array[ diff_ind[ind]:diff_ind[ind+1], 2]     # get a group of depth
+        norm_depth = (depth - depth.mean())/(depth.var() + 1e-10)       # standardize the group of depth
+        
+        # costs are weighted sum of basic costs and standardized depth
+        basic_cost = depth_cost_array[diff_ind[ind]:diff_ind[ind+1], 3]
+        cost  = (_WEIGHT_DISTS_ * norm_depth + basic_cost) * _COST_DEFINITION_ \
+               +(_WEIGHT_DISTS_ * np.abs(norm_depth) + basic_cost ) * (1 - _COST_DEFINITION_)
+        
+        depth_cost_array[diff_ind[ind]:diff_ind[ind+1], 3] = cost
         
     return depth_cost_array[:,3]
     
