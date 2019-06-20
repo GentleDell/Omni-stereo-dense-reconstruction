@@ -232,6 +232,7 @@ def estimate_dense_depth(cam360_list: list, reference_image: int, workspace: str
         cam360_list[reference_image].cost = cost_list[reference_image][:,:,0]
         
         rmtree(output_path)     # clean workspace
+        rmtree(input_path )     # clean parameters
     else:
         # save all views at a time
         for ind, cam in enumerate(cam360_list):
