@@ -326,12 +326,12 @@ def check_path_exist(path: str):
         os.makedirs(path)
 
 
-def show_processbar(num: int, all_steps: int):
+def show_processbar(num: int, all_steps: int, text: str):
     '''
-        It will draw a process bar.
+        It draws a process bar.
     '''
     sys.stdout.write('\r')
-    sys.stdout.write('Creating workspace: ')
+    sys.stdout.write(text)
     sys.stdout.write("[%-20s] %d%%" % ('='*round(num*20/all_steps), 100*(num)/all_steps))
     sys.stdout.flush()
 
@@ -405,7 +405,7 @@ def create_workspace_from_cam360_list( cam_list: list, refimage_index: int = -1,
             score_cam.append(scores)
                 
             # present the process
-            show_processbar(ind+1, len(cam_list))
+            show_processbar(ind+1, len(cam_list), text='Creating workspace: ')
             
     return score_cam
 

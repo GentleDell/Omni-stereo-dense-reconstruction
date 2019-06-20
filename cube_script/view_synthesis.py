@@ -6,15 +6,19 @@ Created on Wed Jun 12 22:03:45 2019
 @author: zhantao
 
 """
-import torch
 import pickle
-import itertools
+
+import warnings
 import numpy as np
 from typing import Tuple
 import spherelib as splib
 import matplotlib.pyplot as plt
 
-_TOP_N_PIXELS_ = 10
+from skimage.filters import median
+from skimage.morphology import disk
+from skimage.restoration import denoise_tv_chambolle
+
+_SYN_METHODS_  = ['easy', 'sort', 'tv', 'median'] 
 
 _WEIGHT_COSTS_  = 0.25
 _WEIGHT_CENTER_ = 0.5
@@ -25,41 +29,168 @@ _COST_DEFINITION_ = 0   # 0: 'Gaussian';
 
 
 def synthesize_view(cam360_list: list, rotation: np.array, translation: np.array, 
-                    resolution: tuple, with_depth = False, gpu_index: int = 0): 
+                    resolution: tuple, method: str = 'sort', parameters: int = 3, with_depth = False): 
+    
+    '''
+        Given a list of cam360_list, it synthesize a new view at the given pose with 
+        the given resolution. 
+    '''
+    
+#    print("projecting pixels of original views to the synthesized view ...")
+#    projected_view = project_to_view(cam360_list, rotation, translation, resolution)
+#    
+#    print("computing the cost and aggregating pixels ...")
+#    pixels = aggregate_pixels(projected_view, resolution)
+    
+    pickle_in = open("temp.pickle","rb")
+    pixels = pickle.load(pickle_in)
+    
+    print("conducting optimization ...")
+    Syn_pixels = pixel_filter(pixels, resolution, method, parameter=parameters)
+    
+    print("generating texture ...")
+    texture = get_texture(Syn_pixels[:,[0,1,4,5]], cam360_list, resolution)
+    
+    return texture
+
+
+def pixel_filter(pixels: np.array, resolution: tuple, method: str, parameter: float):
         
-#    projected_view = project_to_view(cam360_list, rotation, translation, 
-#                                resolution)
+    try:
+        method_ind = _SYN_METHODS_.index(method.lower())
+    except:
+        warnings.warn('{:s} is not supported now; use "sort" to synthesize the view'.format(method))
+        method_ind = 1
     
-#    coord_vol = aggregate_pixels(projected_view, resolution, gpu_index)
+    if method_ind == 0:
+        parameter = np.clip(np.round(parameter), pixels[:,-1].min(), pixels[:,-1].max())
+        Syn_pixels = pixels[pixels[:,5] == parameter,:]
     
-    # saved in this TEST
-    pickle_in = open("./synthesis_cam360.pickle","rb")
-    coord_vol = pickle.load(pickle_in)
+    else:
+        diff_ind = compute_diff(pixels[:,:2])
+        top_pixels = pixels[diff_ind, :]
+        
+        if method_ind == 1:
+            Syn_pixels = top_pixels
+        else:
+            
+            indice_image = -1 * np.ones(resolution)
+            indice_image[top_pixels[:,0].astype(int), top_pixels[:,1].astype(int)] = top_pixels[:,5]
+        
+            if method_ind == 2:
+                filtered_indices = denoise_tv_chambolle(indice_image, weight = parameter)
+                
+            elif method_ind == 3:
+                filtered_indices = median(indice_image.astype(np.uint8), disk(parameter))
     
-    pixels = np.array(list(itertools.zip_longest(*coord_vol, fillvalue=0))).T
-    best_pixels = np.stack(pixels[:,0])
-    
-    texture = get_texture(best_pixels)
-    
-    return texture
+            Syn_pixels = verify_and_synthesize( filtered_indices, indice_image, pixels )
+            
+    return Syn_pixels
 
 
-def get_texture(texture_index: np.array):
+def verify_and_synthesize( new_indices: np.array, original_indices: np.array, all_pixels: np.array ):
     
     
+    # Verify the filtered indices are reasonable.
+    #    
+    # It is required that a filtered view index for a certian pixel should have 
+    # at least one candidate in the 'all_pixels' array. Otherwise, this index is 
+    # invalid. 
+    #
+    # E.g. for the pixel at [255,255], all_pixel shows that view 7 and view 8 are 
+    # two candidate views. If the filtered view index is one of the two view index, 
+    # then it make sense to keep the index. However, if the filtered view is 3, 
+    # not one of the two candidates, then the original view index will be resumed.
+    #
+    # Similarly, if there is no candidate, then the filtered index will be thrown.
     
-    return texture
+    # convert the value (filtering will set -1 to be 255)
+    new_indices = new_indices.astype(int)
+    new_indices[new_indices == 255] = -1
+#    TODO: solve -1
+    index_of_view = np.unique(all_pixels[:,-1])
+    
+    # count the number of candidates for every pixel and save it into a 3D matrix
+    # together with information of the coordinates and view indices.
+    keys, counts = np.unique(all_pixels[:, [0,1,5]], axis=0, return_counts=True)
+         # '+2' creates another layer to deal with -1 in line 124 (treated as 'the last element')
+         # '+1' works as well but it will slightly affact the verification process.
+    compress_pix_cnt = np.zeros( new_indices.shape + (index_of_view.max().astype(int)+2,) )  
+    compress_pix_cnt[keys[:,0].astype(int), keys[:,1].astype(int), keys[:,2].astype(int)] = counts
+    
+    # get the pixels whose view indices were changed during filtering; get the 
+    # corresponding new indices.
+    diff_row, diff_col = np.where(new_indices - original_indices != 0)
+    diff_view_index = new_indices[diff_row, diff_col]
+    
+    # if there is at least one candidates for a pixel, keep it. (not necessary 
+    # to include the filtered indices)
+    keep_flag = np.sum(compress_pix_cnt[diff_row, diff_col, :], axis = 1) > 0
+    # if the filtered indices do not have corresponding candidates, resume the 
+    # original indices
+    resume_flag = compress_pix_cnt[diff_row, diff_col, diff_view_index] == 0
+    
+    new_indices[diff_row, diff_col] = (1-resume_flag)*new_indices[diff_row, diff_col] + resume_flag*original_indices[diff_row, diff_col]
+    new_indices[diff_row, diff_col] = keep_flag*new_indices[diff_row, diff_col] + -1*(1 - keep_flag)
+    
+    # Convert verified indices to required formate
+    # 
+    # Firstly, get pixel coordinate, raveled position and view index for all candidates.
+    # As it is possible that for some pixels, there are many candidates from the same view
+    # and the number of the candidates is not fixed. Meawhile, it is complicate to create
+    # an variant-length array. So, we only keep the best candidates from each view for each
+    # pixel. 
+    #
+    # This is consistent with the original_indices, because it is generated by keeping
+    # the best cadidates for each pixel.
+    # 
+    # Then, the view is synthesized by taking pixel coordinates, raveled positions and
+    # view indices for all pixels of the synthesis view.
+    
+    # flip to inverse order to keep the best candidate for each pixel and view (as the 
+    # all_pixels is sorted descendingly with costs)
+    keys = np.flip(all_pixels[:, [0,1,4,5]], axis=0)
+    compress_ravel_pos = np.zeros( new_indices.shape + (len(index_of_view),) )
+    compress_ravel_pos[keys[:,0].astype(int), keys[:,1].astype(int), keys[:,3].astype(int)] = keys[:,2]
+    
+    # taking pixel coordinates, raveled positions and view indices for synthesis view
+    pix_coord = np.where(new_indices >= 0)
+    view_ind = new_indices[pix_coord]
+    
+    # formating the data
+    Syn_pixels = np.zeros([len(pix_coord[0]), 6])
+    ravel_pos  = compress_ravel_pos[pix_coord[0], pix_coord[1], view_ind]
+    Syn_pixels[:,:2] = np.vstack(pix_coord).T
+    Syn_pixels[:,4] = ravel_pos
+    Syn_pixels[:,5] = view_ind
+    
+    return Syn_pixels
+
+
+def get_texture(texture_index: np.array, cam360_list: list, resolution: tuple):
+    
+    syn_view = np.zeros(resolution + (3,))
+    
+    for ind in range(len(cam360_list)):
+        
+        cam = cam360_list[ind]
+        
+        pixel_index = texture_index[ texture_index[:,-1] == ind  ].astype(int)
+        cam_ravel = cam.texture.reshape([-1,3])
+        
+        syn_view[ pixel_index[:, 0], pixel_index[:, 1],: ] = cam_ravel[ pixel_index[:,2], : ]
+        
+    return syn_view
 
 
 def project_to_view(cam360_list: list, rotation: np.array, translation: np.array, resolution: tuple):
     
-    projections = np.empty((resolution[0], 0, 4))
-    for cam in cam360_list: 
-        # here requires all 360 cams to be the same size
+    projections = np.empty((0, 6))
+    for ind in range(len(cam360_list)): 
         
-        # 360 image size
-        height = cam._height
-        width  = cam._width
+        print(">>>> projecting the {:d} view ...".format(ind))
+        
+        cam = cam360_list[ind]
         
         # Build an equiangular grid in (theta, phi) coordinates.
         theta, phi = cam.get_sampling_axes()
@@ -77,14 +208,22 @@ def project_to_view(cam360_list: list, rotation: np.array, translation: np.array
                 rotation, translation, rad_b=1)
         
         # convert theta and phi into pixel coordinate
-        theta_new = theta_new.reshape((height, width)) *  resolution[0]/np.pi
-        phi_new   = phi_new.reshape((height, width)) * resolution[1]/(2*np.pi)
+        theta_pix = theta_new *  resolution[0]/np.pi
+        phi_pix   = phi_new * resolution[1]/(2*np.pi)
         
-        depth_new = depth_new.reshape((height, width))
-        basic_cost= _WEIGHT_COSTS_  * cam.cost + \
-                    _WEIGHT_CENTER_ * np.sqrt( (theta_new - np.round(theta_new))**2 + (phi_new - np.round(phi_new))**2 ) 
-    
-        projections = np.append(projections, np.stack((np.round(theta_new), np.round(phi_new), depth_new, basic_cost), axis = 2), axis = 1)
+        basic_cost= _WEIGHT_COSTS_  * cam.cost.reshape(-1) + \
+                    _WEIGHT_CENTER_ * np.sqrt( (theta_pix - np.round(theta_pix))**2 + (phi_pix - np.round(phi_pix))**2 ) 
+        
+        pixel_ind = np.arange(0, cam._height * cam._width)
+        
+        view_ind  = ind*np.ones((cam._height * cam._width))
+        
+        projections = np.append(projections, np.stack((np.clip( np.round(theta_pix), 0, 511) ,  
+                                                       np.clip( np.round(phi_pix),  0, 1023) , 
+                                                       depth_new, 
+                                                       basic_cost,
+                                                       pixel_ind,
+                                                       view_ind), axis = 1), axis = 0)
         # all views are concatenated into a matrix of (res[0], num_view*res[1], 4) 
         # where [:,:,:2] is the row and column of corresponding pixel in synthesis 
         # view while [:,:,2] is the depth and [:,:,3] is the cost
@@ -92,10 +231,9 @@ def project_to_view(cam360_list: list, rotation: np.array, translation: np.array
     return projections 
 
 
-def aggregate_pixels(projections: np.array, resolution: tuple, gpu_index: int):
+def aggregate_pixels(projections: np.array, resolution: tuple):
     '''
-        For each pixel of the synthesized view, it computes costs for all candidates
-        and keeps top _TOP_N_PIXELS_ pixels for further operation.
+        For each pixel of the synthesized view, it computes costs for all candidates.
         
         Parameters
         ----------    
@@ -104,56 +242,57 @@ def aggregate_pixels(projections: np.array, resolution: tuple, gpu_index: int):
             
         resolution: tuple
             Resolution of the synthesized view.
-            
-        gpu_index: int
-            The index of gpu for synthesis.
     '''
-    coord_vol = []
     
-    # obtain data for synthesis view
-    projections_torch = torch.from_numpy(projections)
-    if torch.cuda.is_available():
-        projections_torch = projections_torch.cuda(gpu_index)
+    sort_ind = np.lexsort( (projections[:,1], projections[:,0]) )
+    projections = projections[sort_ind]
     
-    for row in range( 0, 10 ):
-        print('sweeping the {:d} row'.format(row))
-        for col in range(resolution[1]):
-            mask = round_to_pixel(projections_torch, (row,col))
-            cost = compute_cost(projections_torch[mask][:,2:])                  
-            
-            valid_size = min(_TOP_N_PIXELS_, len(cost))
-            sorted_cost, sort_ind = torch.topk( cost, k = valid_size, largest = False )
-            
-            coord_vol.append( mask.nonzero()[sort_ind].cpu().numpy() )
+    projections[:,3] = compute_cost(projections[:,:4], resolution)
+    
+    sort_ind = np.lexsort( (projections[:,3], projections[:,1], projections[:,0]) )
+    projections = projections[sort_ind]
 
-    return coord_vol
-    
+    return projections
 
-def compute_cost(depth_cost_array: torch.tensor):
+
+def compute_diff(coordinates: np.array):
+    
+    row_ind = np.diff(coordinates[:,0]) > 0 
+    col_ind = np.diff(coordinates[:,1]) > 0
+    diff_ind = np.where( row_ind | col_ind )[0] + 1
+    diff_ind = np.insert(diff_ind, 0, 0)
+    
+    return diff_ind
+
+
+def compute_cost(depth_cost_array: np.array, resolution: tuple):
     '''
         It computes the cost with the given depth and cost tensor.
+        
+        If there are many estimations, the cost will be computed with normal distribution 
+        or the nearest depth, with a predifined weight.
     '''
-    # if there are many estimations, the cost will be computed with normal distribution 
-    # or the nearest depth, with a predifined weight. 
-    depth = depth_cost_array[:,0]
-    norm_depth = (depth - torch.mean(depth)) / (torch.std(depth, unbiased = False) + 1e-10)
+    keys, counts = np.unique(depth_cost_array[:, [0,1,5]], axis=0, return_counts=True)
+    compress_pix_depth = np.zeros( resolution + (depth_cost_array[:,-1].max().astype(int)+1,) )  
+    compress_pix_depth[keys[:,0].astype(int), keys[:,1].astype(int), keys[:,2].astype(int)] = counts
     
-    # if _COST_DEFINITION_ is 1, the smaller of the distance the lower of the cost from depth
-    # if _COST_DEFINITION_ is 1, the cost will be computed as gaussian distribution
-    cost  = (_WEIGHT_DISTS_ * norm_depth + depth_cost_array[:,1]) * _COST_DEFINITION_ \
-           +(_WEIGHT_DISTS_ * torch.abs(norm_depth) + depth_cost_array[:,1] )* (1 - _COST_DEFINITION_)
-           
-    return cost
-
-
-def round_to_pixel(projected_mat, target: tuple):    
     
-    mask_theta = projected_mat[:,:,0] == target[0]
-    mask_phi   = projected_mat[:,:,1] == target[1]
-    
-    mask = mask_theta * mask_phi
-    
-    return mask
+#    diff_ind = compute_diff(depth_cost_array[:,:2])
+#    valid_range = len(diff_ind)-1
+#    
+#
+#    for ind in range(valid_range):
+#        
+#        depth = depth_cost_array[ diff_ind[ind]:diff_ind[ind+1], 2]
+#        norm_depth = (depth - depth.mean())/(depth.var() + 1e-10)
+#        
+#        basic_cost = depth_cost_array[diff_ind[ind]:diff_ind[ind+1], 3]
+#        cost  = (_WEIGHT_DISTS_ * norm_depth + basic_cost) * _COST_DEFINITION_ \
+#               +(_WEIGHT_DISTS_ * np.abs(norm_depth) + basic_cost ) * (1 - _COST_DEFINITION_)
+#        
+#        depth_cost_array[diff_ind[ind]:diff_ind[ind+1], 3] = cost
+        
+    return depth_cost_array[:,3]
     
 
 def project(theta: np.array, phi: np.array, depth: np.array,
@@ -198,3 +337,34 @@ def project(theta: np.array, phi: np.array, depth: np.array,
     # theta_proj, phi_proj are (N,) np.arrays.
 
     return theta_proj, phi_proj, depth_proj
+
+
+def printProgressBar (iteration, total, prefix = '', suffix = '', decimals = 1, length = 100, fill = '█'):
+    """
+    Call in a loop to create terminal progress bar  
+    from: 
+        https://stackoverflow.com/questions/3173320/text-progress-bar-in-the-console/27871113 @ Greenstick
+        
+    @params:
+        iteration   - Required  : current iteration (Int)
+        total       - Required  : total iterations (Int)
+        prefix      - Optional  : prefix string (Str)
+        suffix      - Optional  : suffix string (Str)
+        decimals    - Optional  : positive number of decimals in percent complete (Int)
+        length      - Optional  : character length of bar (Int)
+        fill        - Optional  : bar fill character (Str)
+    """
+    percent = ("{0:." + str(decimals) + "f}").format(100 * (iteration / float(total)))
+    filledLength = int(length * iteration // total)
+    bar = fill * filledLength + '-' * (length - filledLength)
+    print('\r%s |%s| %s%% %s' % (prefix, bar, percent, suffix), end = '\r')
+    # Print New Line on Complete
+    if iteration == total: 
+        print()
+    
+#    printProgressBar(0, valid_range, prefix = 'Progress:', suffix = 'Complete', length = 50)
+#    printProgressBar(ind + 1, valid_range, prefix = 'Progress:', suffix = 'Complete', length = 50)
+        
+        
+        
+        
