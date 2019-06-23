@@ -27,7 +27,7 @@ parser.add_argument("--reference_view",  type=int , default=4,  help="The index 
 
 parser.add_argument("--view_selection" , default=True, action='store_true', help="Select views for dense reconstruction") 
 
-parser.add_argument("--views_for_synthesis",  type=int , default=4,  help="The number of views to synthesize the 360 depthmap; only 4 and 6 are supported") 
+parser.add_argument("--views_for_depth",  type=int , default=4,  help="The number of views to synthesize the 360 depthmap; only 4 and 6 are supported") 
 
 parser.add_argument("--gpu_index",  type=int , default=2,  help="The index of GPU to run the Patch Matching") 
 
@@ -80,7 +80,7 @@ def main():
                                         workspace = args.workspace,
                                         patchmatch_path = args.patchmatch_path, 
                                         reference_view  = args.reference_view,
-                                        views_for_synthesis = args.views_for_synthesis,
+                                        views_for_depth = args.views_for_depth,
                                         use_view_selection  = args.view_selection,
                                         gpu_index = args.gpu_index)
     

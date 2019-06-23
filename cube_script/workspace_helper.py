@@ -70,7 +70,7 @@ BEST_OF_N_VIEWS = 10
 
 
 def dense_from_cam360list(cam360_list: list, workspace: str, patchmatch_path: str, reference_view: int,
-                          views_for_synthesis: int=4, use_view_selection: bool=False, gpu_index: int=-1):
+                          views_for_depth: int=4, use_view_selection: bool=False, gpu_index: int=-1):
     """
         Given a list of cam360 objects, it calls 'estimate_dense_depth' to estimate 
         depth for all cam360 objects in the list.
@@ -89,7 +89,7 @@ def dense_from_cam360list(cam360_list: list, workspace: str, patchmatch_path: st
         reference_view: int
             The index of the reference view. Only works when view selection is disabled;
             
-        views_for_synthesis: int
+        views_for_depth: int
             The number of views (4 or 6) to synthesis the omnidirectional depthmap. 
             4 means the sky and ground will be neglected.      
         
@@ -106,7 +106,7 @@ def dense_from_cam360list(cam360_list: list, workspace: str, patchmatch_path: st
                                                reference_image = cnt,
                                                workspace = workspace,
                                                patchmatch_path = patchmatch_path, 
-                                               views_for_synthesis = views_for_synthesis,
+                                               views_for_depth = views_for_depth,
                                                use_view_selection = True,
                                                gpu_index = gpu_index)
     else:
@@ -115,14 +115,14 @@ def dense_from_cam360list(cam360_list: list, workspace: str, patchmatch_path: st
                                            reference_image = reference_view,
                                            workspace = workspace,
                                            patchmatch_path = patchmatch_path, 
-                                           views_for_synthesis = views_for_synthesis,
+                                           views_for_depth = views_for_depth,
                                            use_view_selection = False,
                                            gpu_index = gpu_index)    
     return cam360_list
 
 
 def estimate_dense_depth(cam360_list: list, reference_image: int, workspace: str, patchmatch_path: str, 
-                          views_for_synthesis: int=4, use_view_selection: bool=False, gpu_index: int=-1):
+                          views_for_depth: int=4, use_view_selection: bool=False, gpu_index: int=-1):
     """
         Given a list of cam360 objects, it estimates depthmap for the reference image.
     
@@ -154,7 +154,7 @@ def estimate_dense_depth(cam360_list: list, reference_image: int, workspace: str
         patchmatch_path: str
             Where to find the executable patch matching stereo GPU file. 
             
-        views_for_synthesis: int
+        views_for_depth: int
             The number of views (4 or 6) to synthesis the omnidirectional depthmap. 
             4 means the sky and ground will be neglected.
             
@@ -170,15 +170,15 @@ def estimate_dense_depth(cam360_list: list, reference_image: int, workspace: str
                                   workspace = './workspace',
                                   reference_image = 4,  
                                   patchmatch_path = './colmap', 
-                                  views_for_synthesis = 4)
+                                  views_for_depth = 4)
     """
     # create a workspace for patch matching stereo GPU
-    scores_list = create_workspace_from_cam360_list(cam_list=cam360_list, refimage_index=reference_image, number_of_views = views_for_synthesis,
+    scores_list = create_workspace_from_cam360_list(cam_list=cam360_list, refimage_index=reference_image, number_of_views = views_for_depth,
                                                     work_dir = workspace, view_selection=use_view_selection)
         
     # run patch matching stereo on each cube views
     print("\n\nExecuting patch match stereo GPU")
-    for view in range(views_for_synthesis):
+    for view in range(views_for_depth):
         
         input_path = os.path.join(workspace, "cubemaps/parameters/view" + str(view))
         output_path= os.path.join(workspace, "patch_match_ws/view" + str(view))
@@ -215,14 +215,14 @@ def estimate_dense_depth(cam360_list: list, reference_image: int, workspace: str
     print("\n\nReprojecting cubic depth to 360 depth ...")
     resolution = [cam360_list[0]._height, cam360_list[0]._width]
     depth_list = reconstruct_omni_maps(omni_workspace=os.path.join(workspace, 'omni_depthmap/depth_maps/*'), 
-                                       view_to_syn=views_for_synthesis, 
+                                       view_to_syn=views_for_depth, 
                                        maps_type='depth_maps',
                                        resolution=resolution)
     
     # project cost maps
     print("\n\nReprojecting cost maps ...")
     cost_list = reconstruct_omni_maps(omni_workspace=os.path.join(workspace, 'omni_depthmap/cost_maps/*'), 
-                                       view_to_syn=views_for_synthesis, 
+                                       view_to_syn=views_for_depth, 
                                        maps_type='cost_maps',
                                        resolution=resolution)
     
@@ -263,7 +263,7 @@ def set_patchmatch_cfg(workspace: str, reference_image: int, score_list: list,
             are None.
             
         view_ind : int
-            The index of the current cubic view. Smaller or equal to views_for_synthesis. 
+            The index of the current cubic view. Smaller or equal to views_for_depth. 
     '''
     path_to_images = os.path.join(workspace, 'images/*')
     path_to_config = os.path.join(workspace, 'stereo/patch-match.cfg')
