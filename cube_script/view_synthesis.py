@@ -8,6 +8,7 @@ Created on Wed Jun 12 22:03:45 2019
 """
 import pickle
 
+import torch
 import warnings
 import numpy as np
 from typing import Tuple
@@ -24,13 +25,16 @@ _WEIGHT_COSTS_  = 0.25
 _WEIGHT_CENTER_ = 0.5
 _WEIGHT_DISTS_  = 0.25
 
+_NUM_CANDIDATES_  = 10
+
+# cost function, affect the consistency of synthesized view
 _COST_DEFINITION_ = 0   # 0: 'Gaussian';
                         # 1: 'Nearest' ;
 
 
 def synthesize_view(cam360_list: list, rotation: np.array, translation: np.array, 
                     resolution: tuple, method: str = 'sort', parameters: float = 3.0, 
-                    with_depth: bool = False): 
+                    with_depth: bool = False, gpu_index: int = -1): 
     
     '''
         Given a list of cam360 objects, it synthesize a new view at the given pose with 
@@ -64,20 +68,23 @@ def synthesize_view(cam360_list: list, rotation: np.array, translation: np.array
             
         with_depth: bool
             whether to output depth map for the target view
+        
+        gpu_index: int
+            the index of gpu to accelerate the function
     '''
     
     print("projecting pixels of original views to the synthesized view ...")
     projected_view = project_to_view(cam360_list, rotation, translation, resolution)
     
     print("computing the cost and aggregating pixels ...")
-    pixels = aggregate_pixels(projected_view, resolution)
+    pixels = aggregate_pixels(projected_view, resolution, fast = gpu_index>=0)
     
-    # for testing
+#    # for testing
 #    pickle_in = open("temp.pickle","rb")
 #    pixels = pickle.load(pickle_in)
     
     print("conducting optimization ...")
-    Syn_pixels = pixel_filter(pixels, resolution, method, parameter=parameters)
+    Syn_pixels = pixel_filter(pixels, resolution, method, parameter=parameters, gpu_ind=gpu_index)
     
     print("generating texture ...")
     texture = get_texture(Syn_pixels[:,[0,1,4,5]], cam360_list, resolution, with_depth)
@@ -85,7 +92,7 @@ def synthesize_view(cam360_list: list, rotation: np.array, translation: np.array
     return texture
 
 
-def pixel_filter(pixels: np.array, resolution: tuple, method: str, parameter: float):
+def pixel_filter(pixels: np.array, resolution: tuple, method: str, parameter: float, gpu_ind: int = -1):
     '''
         It filters out outliers using the required methods. Npw, 4 methods are 
         supported: 'simple', 'sort', 'tv', 'median'.
@@ -119,6 +126,9 @@ def pixel_filter(pixels: np.array, resolution: tuple, method: str, parameter: fl
                 'sort'   -- None
                 'tv'     -- lambda
                 'median' -- size of the sliding window] 
+        
+        gpu_ind: int
+            gpu index
     '''
     # verify the required method
     try:
@@ -149,16 +159,20 @@ def pixel_filter(pixels: np.array, resolution: tuple, method: str, parameter: fl
                 filtered_indices = median(indice_image.astype(np.uint8), disk(parameter))
                 
             # synthesize the view
-            Syn_pixels = verify_and_synthesize( filtered_indices, indice_image, pixels )
+            func = [verify_and_synthesize_cpu, verify_and_synthesize_gpu]
+            Syn_pixels = func[ gpu_ind >= 0 and torch.cuda.is_available() ](filtered_indices, indice_image, pixels, gpu_ind)
             
     return Syn_pixels
 
 
-def verify_and_synthesize( new_indices: np.array, original_indices: np.array, all_pixels: np.array ):
+def verify_and_synthesize_cpu( new_indices: np.array, original_indices: np.array, all_pixels: np.array, gpu_ind = None ):
     '''
         It verifies whether the filtered indices are reasonable. Then it converts 
         verified indices to required formate.
-        [can be further accelerated using GPU]
+        
+        This is the cpu version and will be used if there is no GPU available or
+        GPU is disabled. For a 512*1024 imag, it is 2 seconds slower then GPU
+        version.
         
         Parameters
         ----------  
@@ -170,6 +184,9 @@ def verify_and_synthesize( new_indices: np.array, original_indices: np.array, al
             
         all_pixels: np.array
             all candidates
+            
+        gpu_ind: None
+            not used
     '''
     
     # Verify the filtered indices are reasonable.
@@ -242,6 +259,109 @@ def verify_and_synthesize( new_indices: np.array, original_indices: np.array, al
     ravel_pos  = compress_ravel_pos[pix_coord[0], pix_coord[1], view_ind]
     Syn_pixels[:,:2] = np.vstack(pix_coord).T
     Syn_pixels[:,4] = ravel_pos
+    Syn_pixels[:,5] = view_ind
+    
+    return Syn_pixels
+
+
+def verify_and_synthesize_gpu( new_indices: np.array, original_indices: np.array, all_pixels: np.array, gpu_ind: int = 0):
+    '''
+        It verifies whether the filtered indices are reasonable. Then it converts 
+        verified indices to required formate.
+        
+        GPU accelerated verision; as pytorch on cpu is much slower than numpy, 
+        we use the above verify_and_synthesize_cpu for cpu and this one for gpu.
+        As a result, there are some redundent codes. 
+        For 512*1024 images, 2 seconds faster.
+        
+        Parameters
+        ----------  
+        new_indices: np.array
+            the filtered indices
+            
+        original_indices: np.array
+            indices before filtering
+            
+        all_pixels: np.array
+            all candidates
+            
+        gpu_ind: int
+            gpu index
+    '''
+    
+    # Verify the filtered indices are reasonable.
+    #    
+    # It is required that a filtered view index for a certian pixel should have 
+    # at least one candidate in the 'all_pixels' array. Otherwise, this index is 
+    # invalid. 
+    #
+    # E.g. for the pixel at [255,255], all_pixel shows that view 7 and view 8 are 
+    # two candidate views. If the filtered view index is one of the two view index, 
+    # then it make sense to keep the index. However, if the filtered view is 3, 
+    # not one of the two candidates, then the original view index will be resumed.
+    #
+    # Similarly, if there is no candidate, then the filtered index will be thrown.
+    
+    all_pixels_gpu = torch.from_numpy(all_pixels).cuda(gpu_ind)
+    
+    # convert the value (filtering will set -1 to be 255)
+    new_indices = new_indices.astype(int)
+    new_indices[new_indices == 255] = -1
+    index_of_view = torch.unique(all_pixels_gpu[:,-1])
+    
+    # count the number of candidates for every pixel and save it into a 3D matrix
+    # together with information of the coordinates and view indices.
+    keys, counts = torch.unique(all_pixels_gpu[:, [0,1,5]], dim=0, return_counts=True)
+    compress_pix_cnt = torch.zeros( new_indices.shape + (int(index_of_view.max())+2,) ).long().cuda(gpu_ind) 
+         # '+2' creates another layer to deal with -1 for resume_flag (-1 is treated as 'the last element')
+         # '+1' works as well but it will slightly affect the verification process.
+    keys = keys.long()
+    compress_pix_cnt[keys[:,0], keys[:,1], keys[:,2]] = counts
+    
+    # get the pixels whose view indices were changed during filtering; get the 
+    # corresponding indices.
+    diff_row, diff_col = np.where(new_indices - original_indices != 0)
+    diff_view_index = new_indices[diff_row, diff_col]
+    
+    # if there is at least one candidates for a pixel, keep it. (not necessary 
+    # to include the filtered indices)
+    keep_flag = (torch.sum(compress_pix_cnt[diff_row, diff_col, :], dim = 1) > 0).cpu().numpy()
+    # if the filtered indices do not have corresponding candidates, resume the 
+    # original indices
+    resume_flag = (compress_pix_cnt[diff_row, diff_col, diff_view_index] == 0).cpu().numpy()
+    
+    new_indices[diff_row, diff_col] = (1-resume_flag)*new_indices[diff_row, diff_col] + resume_flag*original_indices[diff_row, diff_col]
+    new_indices[diff_row, diff_col] = keep_flag*new_indices[diff_row, diff_col] + -1*(1 - keep_flag)
+    
+    # Convert verified indices to required formate
+    # 
+    # Firstly, get pixel coordinate, raveled position and view index for all candidates.
+    # As it is possible that for some pixels, there are many candidates from the same view
+    # and the number of the candidates is not fixed. Meanwhile, it is complicated to create
+    # a variant-length array. So, we only keep the best candidates from each view for each
+    # pixel. 
+    #
+    # This is consistent with the original_indices, because it is generated by keeping
+    # the best cabdidate for each pixel.
+    # 
+    # Then, the view is synthesized by taking pixel coordinates, raveled positions and
+    # view indices for all pixels of the synthesis view.
+    
+    # flip to inverse order to keep the best candidate for each pixel and view (as the 
+    # all_pixels is sorted descendingly with costs)
+    keys = torch.from_numpy( np.flip(all_pixels[:, [0,1,4,5]], axis=0).astype(int) ).cuda(gpu_ind)
+    compress_ravel_pos = torch.zeros( new_indices.shape + (len(index_of_view),) ).long().cuda(gpu_ind)
+    compress_ravel_pos[keys[:,0], keys[:,1], keys[:,3]] = keys[:,2]
+    
+    # taking pixel coordinates, raveled positions and view indices for synthesis view
+    pix_coord = np.where(new_indices >= 0)
+    view_ind = new_indices[pix_coord]
+    
+    # formating the data
+    Syn_pixels = np.zeros([len(pix_coord[0]), 6])
+    ravel_pos  = compress_ravel_pos[pix_coord[0], pix_coord[1], view_ind]
+    Syn_pixels[:,:2] = np.vstack(pix_coord).T
+    Syn_pixels[:,4] = ravel_pos.cpu().numpy()
     Syn_pixels[:,5] = view_ind
     
     return Syn_pixels
@@ -375,7 +495,7 @@ def project_to_view(cam360_list: list, rotation: np.array, translation: np.array
     return projections 
 
 
-def aggregate_pixels(projections: np.array, resolution: tuple):
+def aggregate_pixels(projections: np.array, resolution: tuple, fast: bool = False):
     '''
         For each pixel of the synthesized view, it computes costs for all candidates.
         
@@ -387,11 +507,14 @@ def aggregate_pixels(projections: np.array, resolution: tuple):
         resolution: tuple
             Resolution of the synthesized view.
     '''
-    # sort by the index of row and column
-    sort_ind = np.lexsort( (projections[:,1], projections[:,0]) )
+    # sort by the index of row and column, depth and then cost
+    sort_ind = np.lexsort( (projections[:,3], projections[:,2], projections[:,1], projections[:,0]) )
     projections = projections[sort_ind]
     
-    projections[:,3] = compute_cost(projections[:,:4], resolution)
+    if fast:
+        projections = compute_cost_fast(projections, resolution)
+    else:
+        projections = compute_cost(projections, resolution)
     
     # sort by the index of row, column as well as costs
     sort_ind = np.lexsort( (projections[:,3], projections[:,1], projections[:,0]) )
@@ -414,14 +537,33 @@ def compute_diff(coordinates: np.array):
 
 def compute_cost(depth_cost_array: np.array, resolution: tuple):
     '''
-        It computes the cost with the given depth and cost tensor.
+        It computes the final costs with the given depths and basic costs.
         
-        If there are many estimations, the cost will be computed with normal distribution 
-        or the nearest depth, with a predifined weight.
+        For a pixel, if there is only one candidate then its costs won't be
+        changed. But if there are more than one candidates, the final costs 
+        for these candidates will be a weighted sum of standardized depths 
+        of these candidates and the corresponding basic costs. The Formulation 
+        is:
+            cost = _W1_ * basic_costs + _W2_ * std_depth
+            
+        For the standardization, Guassian assumption and nearest neigbor are 
+        supported now. For the Gaussian assumption, the closer to the the mean
+        the lower of the costs. But for the nearest neigbor, the closer to the 
+        camera center the lower of the costs. Which meothd to use is decided by 
+        pre-defined global variable ---- _COST_DEFINITION_ 
+            0: 'Gaussian',
+            1: 'Nearest' ;
         
+        This implemetation is a slow version, but it is guaranteed to find the
+        best candidates for pixels (as long as they has candidates).
+        
+        Parameters
+        ----------  
         depth_cost_array: np.array
             array containing coordinates [:, :2], depth[:, 3] and cost[:, 4]
+            
         resolution: tuple
+            the resolution of the final image.
     '''    
     # get the indices where coordinates change
     diff_ind = compute_diff(depth_cost_array[:,:2])
@@ -440,7 +582,77 @@ def compute_cost(depth_cost_array: np.array, resolution: tuple):
         
         depth_cost_array[diff_ind[ind]:diff_ind[ind+1], 3] = cost
         
-    return depth_cost_array[:,3]
+    
+    return depth_cost_array
+
+
+def compute_cost_fast(depth_cost_array: np.array, resolution: tuple):
+    '''
+        It computes the final costs with the given depths and basic costs.
+        
+        The idea is the same as the function above, but to accelerate the 
+        execution, only the first _NUM_CANDIDATES_ candidates of each pixel 
+        are considered to compute the final costs.
+     
+        As a result, the best candidate is not guaranted to be found by this
+        function. but it still perfomance well excepth for some inconsistency
+        on the final textures and depth. 
+        
+        For a 512*1024 image, it costs about 5 second to compute the final 
+        costs -- 8 seconds faster then the slower one.
+        
+        depth_cost_array: np.array
+            all candidates
+            
+        resolution: tuple
+            output resolution
+    '''    
+    pixel_array = np.nan * np.ones(resolution + (_NUM_CANDIDATES_,))
+    view_array  = np.nan * np.ones(resolution + (_NUM_CANDIDATES_,))
+    cost_array  = np.nan * np.ones(resolution + (_NUM_CANDIDATES_,))
+    depth_array = np.nan * np.ones(resolution + (_NUM_CANDIDATES_,))
+    
+    # save the top 10 candidates for each pixel
+    ind = 0
+    while ind < _NUM_CANDIDATES_ and depth_cost_array.shape[0] > 0:
+        
+        # get candidates for pixels
+        diff_ind = compute_diff(depth_cost_array[:,:2])
+        
+        # save corresponding data
+        coordinate = depth_cost_array[diff_ind, :2].astype(int)
+        depth_array[coordinate[:,0], coordinate[:,1], ind] = depth_cost_array[diff_ind, 2]
+        cost_array[coordinate[:, 0], coordinate[:,1], ind] = depth_cost_array[diff_ind, 3]
+        pixel_array[coordinate[:,0], coordinate[:,1], ind] = depth_cost_array[diff_ind, 4]
+        view_array[coordinate[:, 0], coordinate[:,1], ind] = depth_cost_array[diff_ind, 5]
+        
+        # remove recorded data
+        depth_cost_array = np.delete(depth_cost_array, diff_ind, axis = 0)
+        
+        ind += 1
+    
+    # standardize depth 
+    depth_array[np.isnan( depth_array[:,:,0]),0] = -1
+    mean = np.repeat(np.nanmean(depth_array, axis=2)[:,:,np.newaxis], _NUM_CANDIDATES_, axis=2)
+    var  = np.repeat( (np.nanvar(depth_array, axis=2) + 1e-10)[:,:,np.newaxis], _NUM_CANDIDATES_, axis=2)
+    std_depth = (depth_array - mean)/var
+    
+    # costs are weighted sum of basic costs and standardized depth
+    cost_array = (_WEIGHT_DISTS_ * std_depth + cost_array) * _COST_DEFINITION_ \
+                +(_WEIGHT_DISTS_ * np.abs(std_depth) + cost_array ) * (1 - _COST_DEFINITION_)
+    
+    # organize the data format
+    depth_array[np.isnan(depth_array)] = -1
+    row, col, layer= np.where(depth_array > 0)
+    
+    depth_cost_array = np.zeros([len(row), 6])
+    depth_cost_array = np.vstack((row, 
+                                 col, 
+                                 depth_array[row, col, layer], 
+                                 cost_array[ row, col, layer], 
+                                 pixel_array[row, col, layer],
+                                 view_array[ row, col, layer])).T
+    return depth_cost_array
     
 
 def project(theta: np.array, phi: np.array, depth: np.array,
