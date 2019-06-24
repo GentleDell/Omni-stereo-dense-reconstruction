@@ -11,14 +11,64 @@ import bpy
 import os
 import numpy as np
 
-# Comment these 3 lines if you do not have a GPU.
-bpy.context.scene.cycles.device = 'GPU'
-bpy.context.user_preferences.addons['cycles'].preferences.compute_device_type = 'CUDA'
-bpy.context.user_preferences.addons['cycles'].preferences.devices[0].use = False
-bpy.context.user_preferences.addons['cycles'].preferences.devices[1].use = False
-bpy.context.user_preferences.addons['cycles'].preferences.devices[2].use = False
-bpy.context.user_preferences.addons['cycles'].preferences.devices[3].use = True
-bpy.context.user_preferences.addons['cycles'].preferences.devices[4].use = False
+_NUM_GPU_ = 4
+
+def read_cofig():
+    '''
+        read configuration file
+        format of render.cfg:
+           '#'    : followed by comments
+           'gpu'  : followed by gpu_index
+           'pose' : followed by pose data: rotation (x-y-z euler in degree) + position
+           'res'  : resolution
+    '''
+    poses = None
+    gpu_index = None
+    resolution = None
+    
+    cfg_file = 'render.cfg'
+    
+    try:
+        os.path.isfile(cfg_file)
+    except:
+        raise ValueError('No valid configuration file found')
+    
+    with open(cfg_file, 'r') as f:
+        for line in f:
+            if line[0] == '#':
+                continue
+            else:
+                if line[:3].lower() == 'gpu':
+                    gpu_index = int(line[4])
+                    
+                elif line[:5].lower() == 'poses':
+                    poses = [ float(item) for item in line[5:].split(' ') if len(item) > 0]
+                    
+                elif line[:3].lower() == 'res':
+                    resolution = [ int(item) for item in line[3:].split(' ') if len(item) > 0 ]
+        
+    if poses is None:
+        raise ValueError('No valid poses')
+        
+    return gpu_index, poses, resolution
+
+
+# In[]
+# Render
+
+gpu_ind, poses, resolution = read_cofig()
+
+# if GPU is enabled
+if gpu_ind is not None:
+    try:
+        bpy.context.scene.cycles.device = 'GPU'
+        bpy.context.user_preferences.addons['cycles'].preferences.compute_device_type = 'CUDA'
+    except:
+        raise ValueError('Can not find valid CUDA version')
+        
+    for i in range(_NUM_GPU_+1):
+        bpy.context.user_preferences.addons['cycles'].preferences.devices[i].use = gpu_ind == i
+
 
 # Create a new camera.
 bpy.ops.object.camera_add()
@@ -38,10 +88,10 @@ cam.data.cycles.panorama_type = 'EQUIRECTANGULAR'
 ##############################################################################################################################
 
 # Camera resolution (e.g., (720, 480), (1920, 1080)).
-resolutions = [(1024, 512)]
+resolutions = [tuple(resolution)]
 
 # Camera positions in the scene.
-camera_coordinates = [(0, 0, 1)]
+camera_coordinates = [tuple(poses[3:])]
 
 # Define the camera field of view.
 cam.data.cycles.latitude_min = -np.pi/2
@@ -51,9 +101,9 @@ cam.data.cycles.longitude_max = np.pi
 
 # Define the camera rotation.
 # The rotation follows the rule of the right hand.
-bpy.context.object.rotation_euler[0] = np.pi/2      # Along x.
-bpy.context.object.rotation_euler[1] = 0            # Along y.
-bpy.context.object.rotation_euler[2] = 0            # Along z.
+bpy.context.object.rotation_euler[0] = poses[0]*np.pi/180            # Along x.
+bpy.context.object.rotation_euler[1] = poses[1]*np.pi/180            # Along y.
+bpy.context.object.rotation_euler[2] = poses[2]*np.pi/180            # Along z.
 
 ##############################################################################################################################
 ##############################################################################################################################

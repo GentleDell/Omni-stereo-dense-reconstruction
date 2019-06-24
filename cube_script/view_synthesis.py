@@ -79,10 +79,6 @@ def synthesize_view(cam360_list: list, rotation: np.array, translation: np.array
     print("computing the cost and aggregating pixels ...")
     pixels = aggregate_pixels(projected_view, resolution, fast = gpu_index>=0)
     
-#    # for testing
-#    pickle_in = open("temp.pickle","rb")
-#    pixels = pickle.load(pickle_in)
-    
     print("conducting optimization ...")
     Syn_pixels = pixel_filter(pixels, resolution, method, parameter=parameters, gpu_ind=gpu_index)
     
