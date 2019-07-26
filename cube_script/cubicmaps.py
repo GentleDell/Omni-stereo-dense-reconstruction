@@ -35,7 +35,7 @@ class CubicMaps:
     -   [ 0th:  back  |  1st:  left  |  2nd:  front  |  3rd:  right  |  4th:  top  |  5th:  bottom ].
 
     In particular, for each pixel on the depthmap, it's depth means the distance between the 3D point 
-    to the camera plane. The depthmaps always have only 1 channel.
+    to the camera plane. Depthmaps always have only 1 channel.
     """
     def __init__(self, dist: float = 1):
         """

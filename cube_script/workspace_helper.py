@@ -58,7 +58,11 @@ view (the top view).
                                            / |
                                         z_0  y_0
 '''
-# the rotation matrixs of the 6 cubemaps
+
+# small number
+EPS = 1e-8
+
+# rotation matrixs from cam360 coordinate to the 6 views (cubmaps)
 VIEW_ROT = np.array([[[-1,0,0], [0,0,-1], [0,-1,0]],
                      [[ 0,1,0], [0,0,-1], [-1,0,0]],
                      [[ 1,0,0], [0,0,-1], [0, 1,0]],
@@ -319,22 +323,13 @@ def generate_config(ref: str, src: list):
         
     return config
     
+
 def check_path_exist(path: str):
     '''
         If the given path does not exist, it will create the path.
     '''
     if not os.path.exists(path):
         os.makedirs(path)
-
-
-def show_processbar(num: int, all_steps: int, text: str):
-    '''
-        It draws a process bar.
-    '''
-    sys.stdout.write('\r')
-    sys.stdout.write(text)
-    sys.stdout.write("[%-20s] %d%%" % ('='*round(num*20/all_steps), 100*(num)/all_steps))
-    sys.stdout.flush()
 
 
 def create_workspace_from_cam360_list( cam_list: list, refimage_index: int = -1, number_of_views: int = 6,
@@ -406,13 +401,13 @@ def create_workspace_from_cam360_list( cam_list: list, refimage_index: int = -1,
             score_cam.append(scores)
                 
             # present the process
-            show_processbar(ind+1, len(cam_list), text='Creating workspace: ')
+            print('Decomposing the {:d} image'.format(ind))
             
     return score_cam
 
 
 def decompose_and_save(cam: Cam360, ref_cam: Cam360, resolution: tuple=None, work_dir: str="./workspace", number_of_views: int=6,
-                        prefix: str="cam360_cubemap",  image_index:int=0,  camera_txt_flag: bool=True, select_view: bool=False):
+                       prefix: str="cam360_cubemap",  image_index:int=0,  camera_txt_flag: bool=True, select_view: bool=False):
     """
         Given a cam360 objects, it decomposes the cam360 objs into 6 cubic maps
         and save them according to the view (back -> view0, front - view1 etc.).
@@ -435,12 +430,6 @@ def decompose_and_save(cam: Cam360, ref_cam: Cam360, resolution: tuple=None, wor
             
         select_view : bool
             whether to select views for dense reconstruction;
-        
-        Examples
-        --------
-        >>> create_workspace_from_cam360_list(cam_list=[cam360_1, cam360_2, cam360_3], 
-                                              refimage_index=4, 
-                                              work_dir = './workspace')
     """    
     if resolution is None:
         resolution = (cam._height, cam._height)
@@ -461,7 +450,6 @@ def decompose_and_save(cam: Cam360, ref_cam: Cam360, resolution: tuple=None, wor
         cubemap_obj.sphere2cube(cam, resolution=resolution)
         
         prefix = prefix + "_{:d}".format(image_index)
-        new_angle = None
         score_list = []
         for ind in range(number_of_views):
                        
@@ -470,17 +458,22 @@ def decompose_and_save(cam: Cam360, ref_cam: Cam360, resolution: tuple=None, wor
             check_path_exist(view_folder)
             check_path_exist(para_folder)
             
+            # compute initial pose for projection 
+            # Assumption: views looking to the same direction are more
+            #             likely to have enough overlaps
+            intial_z = cam.rotation_mtx.dot(reference_pose[0].transpose().dot( VIEW_ROT[ind].transpose() )).dot(np.array([0,0,1]))
+            intial_z = np.expand_dims(intial_z, axis=1)
+            initial_pose = np.abs(eu2pol(intial_z[0], intial_z[1], intial_z[2]))[:,0][:2]
+
+    # TODO: check here
+
             if select_view:
-                # compute initial pose
-                intial_z = cam.rotation_mtx.transpose().dot(reference_pose[0].dot( VIEW_ROT[ind].transpose() )).dot(np.array([0,0,1]))
-                intial_z = np.expand_dims(intial_z, axis=1)
-                initial_pose = eu2pol(intial_z[0], intial_z[1], intial_z[2])
-                # select view
-                cubemap_obj.cubemap[ind], new_angle, score = view_selection(cam, reference_cube[ind], 
-                                                                            initial_pose=(np.abs(initial_pose[1]), np.abs(initial_pose[0])))
+                # if enable view selection -- try to refine the initial pose
+                cubemap_obj.cubemap[ind], initial_pose, score = view_selection(cam, reference_cube[ind], 
+                                                                               initial_pose=(initial_pose[0], initial_pose[1]))
             else:
                 score = None
-            
+
             score_list.append(score)
             
             if (not select_view) or (score is not None):
@@ -505,64 +498,82 @@ def decompose_and_save(cam: Cam360, ref_cam: Cam360, resolution: tuple=None, wor
                 
                 # save poses
                 source_pose = [cam.rotation_mtx, cam.translation_vec]
-                pose_colmap = convert_coordinate(source_pose, reference_pose, index_of_cubemap=ind, new_angle = new_angle)
+                pose_colmap = convert_coordinate(source_pose, reference_pose, index_of_cubemap=ind, initial_pose = initial_pose)
                 save_pose(para_folder, pose_colmap, image_index, image_name, camera_id)  
         
     return score_list, camera_txt_flag
 
 
-def convert_coordinate(source_pose: list, reference_pose: list, index_of_cubemap: int, new_angle: tuple=None):
+def convert_coordinate(source_pose: list, reference_pose: list, index_of_cubemap: int, initial_pose: tuple=None):
     '''
-        It computes the rotation and translation from the reference cube map to 
-        the source cube map.
+        It computes the rotation and translation from the source view to 
+        the reference view.
         
         Parameters
         ----------    
         source_pose : list
-            The pose of the souorce image. camera -> world
+            The pose of the souorce image. 
+            rotation: world -> camera, translation: camera -> world under camera
             
         reference_pose : list
-            The pose of the reference image. camera -> world
+            The pose of the reference image. 
+            rotation: world -> camera, translation: camera -> world under camera
         
         index_of_cubemap : int
             Which cube map is uesd.
         
-        new_angle: tuple
-            [phi, theta], the angle of the new view
+        initial_pose: tuple
+            [theta, phi], the angle of the projected view
         
     '''
     
     ref_tocolmap = VIEW_ROT[index_of_cubemap,:,:]
     src_tocolmap = VIEW_ROT[index_of_cubemap,:,:]
     
-    rotation_ref = reference_pose[0]
-    translation_ref = reference_pose[1]
-    rotation_source = source_pose[0]
-    translation_source = source_pose[1]
+    rotation_ref = reference_pose[0]        # world -> camera
+    rotation_src = source_pose[0]           # world -> camera
+    translation_ref = reference_pose[1]     # camera -> world under camera <=> world -> camera
+    translation_src = source_pose[1]        # camera -> world under camera <=> world -> camera
    
-    if new_angle is not None:
+    if initial_pose is not None:
         # mediate view    
-        if new_angle[0] == 0:
-            med_view2colmap = Rotation.from_euler('x', new_angle[1]).as_euler('zyx')[0]
-        elif new_angle[1] == 0:
-            med_view2colmap = Rotation.from_euler('z', new_angle[0]).as_euler('zyx')[0]
+        if initial_pose[1] == 0:
+            med_view2colmap = Rotation.from_euler('x', initial_pose[0]).as_euler('zyx')
+        elif initial_pose[0] == 0:
+            med_view2colmap = Rotation.from_euler('z', initial_pose[1]).as_euler('zyx')
         else:
-            med_view2colmap = Rotation.from_euler('zx', [new_angle[0], new_angle[1]]).as_euler('zyx')
+            med_view2colmap = Rotation.from_euler('zx', [initial_pose[1], initial_pose[0]]).as_euler('zyx')
             
         new_view2colmap = med_view2colmap + np.array([np.pi, 0, 0])
         src_tocolmap = Rotation.from_euler('zyx', new_view2colmap).as_dcm()
     
-        
-    # convert the poses of images from camera->world (in general) to reference->source (colmap)
-    rotation_ref2world = rotation_ref.dot( ref_tocolmap.transpose() )
-    rotation_world2src = src_tocolmap.dot( rotation_source.transpose() )
     
-    delta_rot = rotation_world2src.dot(rotation_ref2world)
-    quat_rot  = Rotation.from_dcm(delta_rot).as_quat() 
-    quat_rot_colmap = [tmp for tmp in quat_rot[0:3]]
+    # Here rotations and translations are converted from cam360 to colmap
+    # 
+    # In cam360, rotation R is from WORLD to CAMERA; translation t is from CAMERA
+    # to WORLD (expressed under camera coordinates). [R, t] is the T matrix. So, 
+    # given a point Pw from world coordinate, the corresponding coordinate P_cam
+    # is P_cam = [R | t] * Pw 
+    # 
+    # In colmap (image.txt), rotations and translations are from WORLD to CAMERA 
+    # (under world coordinate), which is similar to the coordinate used in cam360.
+    #
+    # During dense reconstructions, coordinates of reference images are world coords.
+    # Thus, poses for colmap can be calculated as:
+    #       R_refview2srcview = R_src2colmap() * R_src * R_ref.inv() * R_ref2colmap.inv()
+    #       t_refview2srcview = - R_src2colmap() * R_src * R_ref.inv() * t_ref + R_src2colmap * t_src
+    
+    rotation_refview2world = rotation_ref.transpose().dot( ref_tocolmap.transpose() )
+    rotation_world2srcview = src_tocolmap.dot( rotation_src )
+    
+    ref2src_rot = rotation_world2srcview.dot(rotation_refview2world)
+    quat_rot  = Rotation.from_dcm(ref2src_rot).as_quat() 
+    quat_rot_colmap = [tmp if np.abs(tmp) > EPS else 0.0 for tmp in quat_rot[0:3]]
     quat_rot_colmap.insert(0, quat_rot[3])
-   
-    translation = rotation_world2src.dot(translation_ref - translation_source) 
+    
+    translation = np.array( [t if np.abs(t) > EPS \
+                               else 0.0 \
+                               for t in (-ref2src_rot.dot( ref_tocolmap.dot(translation_ref)) + src_tocolmap.dot(translation_src) ) ])
     
     return [quat_rot_colmap, translation]
 
@@ -661,6 +672,7 @@ def create_depth_workspace(image_dir: str='', file_suffix: str='exr', work_dir: 
         # load omnidirectional depthmap
         Omni_dep = cv2.imread(filename, cv2.IMREAD_ANYDEPTH)
         # create a Cam360 object
+        # as this is not related to camera poses, the rotations can be set to I. 
         Omni_obj = Cam360(rotation_mtx = np.eye(3), translation_vec=np.zeros([3,1]), 
                           height = Omni_dep.shape[0], width = Omni_dep.shape[1], channels = 1, 
                           depth = Omni_dep)
@@ -1044,7 +1056,7 @@ def evaluate(estimation: np.array, GT: np.array, checking_line: int = 100, save:
 
     # calculate rmse from estimated pixels
     mask = np.logical_and(estimation!=0, diff_map<20)
-    masked_RMSE = np.sqrt(np.sum(diff_map[mask]**2)/(mask.size))
+    masked_RMSE = np.sqrt(np.sum(diff_map[mask]**2)/(np.sum(mask)))
     print('The masked RMSE is:', masked_RMSE )
 
     # to make the error map clear, set this threshold

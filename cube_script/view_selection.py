@@ -11,6 +11,7 @@ import numpy as np
 
 from cam360 import Cam360
 from cubicmaps import CubicMaps
+import matplotlib.pyplot as plt
 
 # thresholds to sort candidate views
 MIN_NUM_FEATURE = 15
@@ -19,7 +20,7 @@ MIN_TRIANGULATION = 6*np.pi/180
 
 
 def view_selection(cam:Cam360, reference:np.array, initial_pose: tuple, fov: tuple=(np.pi/2, np.pi/2),
-                   max_iter: int=10, use_filter: bool=True, threshold: float=5.0):
+                   max_iter: int=10, use_filter: bool=True, threshold: float=10.0):
     '''
         It selects a view together with its score that satisfies two criterions:
             1. sharing the maximum overlapping between the referece image and 
@@ -47,7 +48,7 @@ def view_selection(cam:Cam360, reference:np.array, initial_pose: tuple, fov: tup
             The reference image.
             
         initial_pose : tuple
-            The first pose to start the search. (phi, theta)
+            The first pose to start the search. (theta, phi)
             
         fov: tuple
             Field of view of the selected view. 
@@ -63,10 +64,21 @@ def view_selection(cam:Cam360, reference:np.array, initial_pose: tuple, fov: tup
             The threshold to decide whether the reference view and the source 
             view are close enough.
         
+        Return
+        --------
+        source: np.array
+            selected view
+            
+        pose: tuple:
+            (theta, phi)
+            
+        score: float
+            score of the selected view
+        
         Examples
         --------
         >>> img, pose = view_selection(cam360, ref_view, 
-                                       initial_pose=(np.pi*3/2, np.pi/2))
+                                       initial_pose=(np.pi/2, np.pi*3/2))
     '''
     # initialize objs to be used
     orb = cv2.ORB_create()
@@ -81,13 +93,25 @@ def view_selection(cam:Cam360, reference:np.array, initial_pose: tuple, fov: tup
         reference = np.round(reference*255)
     reference = cv2.cvtColor(reference.astype('uint8'), cv2.COLOR_RGB2GRAY)
     
+    # ATTENTION, here the pose is filipped. [becomes (phi, theta)]
+    initial_pose = (initial_pose[1], initial_pose[0])
+    
     pose = initial_pose
+    phi, theta = pose[0], pose[1]
     for cnt in range(max_iter):
         
         # obtain a source view
         source = cubemaps.cube_projection(cam=cam, direction=(pose + fov), resolution=reference.shape)
         source_gray = cv2.cvtColor( np.round(source*255).astype('uint8'), cv2.COLOR_RGB2GRAY )
-    
+       
+        ##################################
+#        demo and debug
+#        plt.imshow(source)
+#        plt.axis('off')
+#        plt.savefig("view_{:d}.png".format(cnt), bbox_inches='tight')
+#     cubemaps.cube_projection(cam=cam, direction=((3.8,1.57) + fov), resolution=reference.shape)
+        ##################################
+        
         # feature detection and matching
         kp1, des1 = orb.detectAndCompute(reference, None)
         kp2, des2 = orb.detectAndCompute(source_gray, None)
@@ -101,9 +125,19 @@ def view_selection(cam:Cam360, reference:np.array, initial_pose: tuple, fov: tup
             matches = filter_matches(kp1, kp2, matches)
         if len(matches) <= MIN_NUM_FEATURE:
             theta, phi = None, None
-            pose = (np.random.uniform(low=0, high=2*np.pi), np.random.uniform(low=0, high=np.pi))
+            pose = (np.random.normal(loc=initial_pose[0], scale=2.0),
+                    np.random.normal(loc=initial_pose[1], scale=1.0))
+            pose = correct_angles(pose)
             warnings.warn("Can not find enough inlier matches; start random searching")
             continue
+        
+        ####################
+#        demo and debug
+#        show_matches = cv2.drawMatches(reference, kp1, source_gray, kp2, matches[:20], None, flags=2)
+#        plt.imshow(show_matches)
+#        plt.axis('off')
+#        plt.savefig("matches_iter{:d}.png".format(cnt), bbox_inches='tight')
+        ####################
         
         # calculate the distance between centroids
         centroid_dist = feature_centroid_distance(kp1, kp2, matches, source_gray.shape)
@@ -115,14 +149,7 @@ def view_selection(cam:Cam360, reference:np.array, initial_pose: tuple, fov: tup
             phi = pose[0] - np.arctan(centroid_dist[0]*unit_x)
             theta = pose[1] - np.arctan(centroid_dist[1]*unit_y)
             
-            if phi < 0:
-                phi = phi + 2*np.pi
-            elif phi > 2*np.pi:
-                phi = phi - 2*np.pi
-            if theta < 0:
-                theta = -theta
-            elif theta > np.pi:
-                theta = 2*np.pi - theta
+            phi,theta = correct_angles((phi, theta))
         
             pose = (np.asscalar(phi), np.asscalar(theta))
    
@@ -132,12 +159,31 @@ def view_selection(cam:Cam360, reference:np.array, initial_pose: tuple, fov: tup
         score_overlapping = 1 - ((min(len(matches), MIN_OVERLAPPING) - MIN_OVERLAPPING)**2)/(MIN_OVERLAPPING**2)
         score_triangulation = 1 - ((min(angle, MIN_TRIANGULATION) - MIN_TRIANGULATION)**2)/(MIN_TRIANGULATION**2)
         score = score_overlapping + score_triangulation
+        
+        pose = (pose[1], pose[0]) # convert to (theta, phi)
     else:
         print("Fail to find valid views")
         source, pose, score = None, None, None
     
     return source, pose, score
 
+
+def correct_angles( angles: tuple ):
+    
+    phi   = angles[0]
+    theta = angles[1]
+    
+    if phi < 0:
+        phi = phi + 2*np.pi
+    elif phi > 2*np.pi:
+        phi = phi - 2*np.pi
+    if theta < 0:
+        theta = -theta
+    elif theta > np.pi:
+        theta = 2*np.pi - theta
+        
+    return (phi, theta)
+    
 
 def filter_matches(kp1, kp2, matches):
     '''
