@@ -74,7 +74,7 @@ def synthesize_view(cam360_list: list, rotation: np.array, translation: np.array
             the index of gpu to accelerate the function
     '''
     
-    print("projecting pixels of original views to the synthesized view ...")
+    print("projecting pixels from original views to the synthesized view ...")
     projected_view = project_to_view(cam360_list, rotation, translation, resolution)
     
     print("computing the cost and aggregating pixels ...")
@@ -722,14 +722,14 @@ def evaluation( texture: np.array, texture_GT: np.array, depth:np.array, depth_G
     plt.savefig('error_maps.png', dpi=300, bbox_inches="tight")
 
     diff_map = abs(depth_GT - depth)
-    mask = np.logical_and(depth!=0, diff_map<20)
+    mask = depth!=depth.min()
     masked_RMSE = np.sqrt(np.sum(diff_map[mask]**2)/(np.sum(mask)))
-    print('The masked RMSE is:', masked_RMSE )
+    print('The masked RMSE for depth is:', masked_RMSE )
     
     diff_texture = np.abs( cv2.cvtColor(texture_GT.astype('uint8'), cv2.COLOR_RGB2GRAY) - cv2.cvtColor((texture*255).astype('uint8'), cv2.COLOR_RGB2GRAY))
     rmse = np.sqrt(np.sum(diff_texture[mask]**2)/(np.sum(mask)))
     psnr = 20 * np.log10(255 / rmse)
-    print('The masked PSNR is:', psnr )
+    print('The masked PSNR for texture is:', psnr )
     
     print("{:f}% pixels are filled".format(np.sum(mask)/diff_map.size*100))
 

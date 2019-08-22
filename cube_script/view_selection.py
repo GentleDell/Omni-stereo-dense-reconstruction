@@ -84,10 +84,6 @@ def view_selection(cam:Cam360, reference:np.array, initial_pose: tuple, fov: tup
     orb = cv2.ORB_create()
     cubemaps = CubicMaps()
     
-    # the size of a pixel
-    unit_x = 1/reference.shape[1]
-    unit_y = 1/reference.shape[0]
-    
     # color image to grayscale image
     if reference.max() <= 1:
         reference = np.round(reference*255)
@@ -105,7 +101,7 @@ def view_selection(cam:Cam360, reference:np.array, initial_pose: tuple, fov: tup
         source_gray = cv2.cvtColor( np.round(source*255).astype('uint8'), cv2.COLOR_RGB2GRAY )
        
         ##################################
-#        demo and debug
+#        DEMO AND DEBUG
 #        plt.imshow(source)
 #        plt.axis('off')
 #        plt.savefig("view_{:d}.png".format(cnt), bbox_inches='tight')
@@ -132,25 +128,37 @@ def view_selection(cam:Cam360, reference:np.array, initial_pose: tuple, fov: tup
             continue
         
         ####################
-#        demo and debug
+#        DEMO AND DEBUG
 #        show_matches = cv2.drawMatches(reference, kp1, source_gray, kp2, matches[:20], None, flags=2)
 #        plt.imshow(show_matches)
-#        plt.axis('off')
+#        scoreplt.axis('off')
 #        plt.savefig("matches_iter{:d}.png".format(cnt), bbox_inches='tight')
         ####################
         
-        # calculate the distance between centroids
-        centroid_dist = feature_centroid_distance(kp1, kp2, matches, source_gray.shape)
+        # calculate the centroids
+        centroids = feature_centroid(kp1, kp2, matches, source_gray.shape)
                 
-        if np.sqrt(np.sum(centroid_dist**2)) <= threshold:
+        if np.sqrt(np.sum((centroids[0] - centroids[1])**2)) <= threshold:
             break
         else:
+            # calculate changes of angle
+            ref_phi, ref_theta = cubemaps.cartesian2spherical(
+                    phi=pose[0], theta=pose[1], 
+                    width_grids = np.array([centroids[0][0], centroids[0][0]])/reference.shape[0],
+                    height_grids= np.array([centroids[0][1], centroids[0][1]])/reference.shape[1]
+                    )
+            src_phi, src_theta = cubemaps.cartesian2spherical(
+                    phi=pose[0], theta=pose[1], 
+                    width_grids = np.array([centroids[1][0], centroids[1][0]])/reference.shape[0],
+                    height_grids= np.array([centroids[1][1], centroids[1][1]])/reference.shape[1]
+                    )
+            delta_phi, delta_theta = ref_phi[0]-src_phi[0], ref_theta[0]-src_theta[0]
+            
             # update poses
-            phi = pose[0] - np.arctan(centroid_dist[0]*unit_x)
-            theta = pose[1] - np.arctan(centroid_dist[1]*unit_y)
+            phi = pose[0] - delta_phi
+            theta = pose[1] - delta_theta
             
             phi,theta = correct_angles((phi, theta))
-        
             pose = (np.asscalar(phi), np.asscalar(theta))
    
     # calculate the score of the selected view
@@ -199,7 +207,7 @@ def filter_matches(kp1, kp2, matches):
     return matches_filttered
 
 
-def feature_centroid_distance(kp1, kp2, matches, image_size):
+def feature_centroid(kp1, kp2, matches, image_size):
     '''
         For each group of keypoints, it calculates a weighted centroid and then it computes
         the distance between the two weighted centroids.
@@ -219,7 +227,7 @@ def feature_centroid_distance(kp1, kp2, matches, image_size):
     ref_centroid = np.average(ref_features, weights = weight, axis = 0)
     src_centroid = np.average(src_features, weights = weight, axis = 0)
     
-    return ref_centroid - src_centroid
+    return [ref_centroid, src_centroid]
 
 
 def convert_angle(theta: float, phi: float, initial_pose: list):
