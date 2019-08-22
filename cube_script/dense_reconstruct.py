@@ -25,7 +25,7 @@ parser.add_argument("--workspace"      ,  type=str,  default='../data_demo/works
 
 parser.add_argument("--reference_view" ,  type=int , default=4,  help="The index of the reference view. Only works when view_selection is disabled.") 
 
-parser.add_argument("--view_selection" , default=True, action='store_true', help="Select views for dense reconstruction") 
+parser.add_argument("--view_selection" , default=False, action='store_true', help="Select views for dense reconstruction") 
 
 parser.add_argument("--views_for_depth",  type=int , default=4,  help="The number of views to synthesize the 360 depthmap; only 4 and 6 are supported") 
 
@@ -33,6 +33,7 @@ parser.add_argument("--gpu_index",  type=int , default=2,  help="The index of GP
 
 parser.add_argument("--pose_list"      ,  nargs='+', default=['4'],  help="A list of poses corresponding to the given images; e.g. R1,t1,R2,t2,... (from world to local)") 
 
+parser.add_argument("--geometric_depth" , default=False, action='store_true', help="Estimate geometric depth or photometric depth") 
 
 def main():
     
@@ -89,7 +90,8 @@ def main():
                                         reference_view  = args.reference_view,
                                         views_for_depth = args.views_for_depth,
                                         use_view_selection = args.view_selection,
-                                        gpu_index = args.gpu_index)
+                                        gpu_index = args.gpu_index,
+                                        geometric_depth = args.geometric_depth)
     
     # save data for view synthesis
     pickle_out = open(os.path.join(args.workspace,"cam360.pickle"),"wb")

@@ -73,8 +73,9 @@ VIEW_ROT = np.array([[[-1,0,0], [0,0,-1], [0,-1,0]],
 BEST_OF_N_VIEWS = 10
 
 
-def dense_from_cam360list(cam360_list: list, workspace: str, patchmatch_path: str, reference_view: int,
-                          views_for_depth: int=4, use_view_selection: bool=False, gpu_index: int=-1):
+def dense_from_cam360list(cam360_list: list, workspace: str, patchmatch_path: str, 
+                          reference_view: int, views_for_depth: int=4, use_view_selection: bool=False, 
+                          gpu_index: int=-1, geometric_depth: bool=False):
     """
         Given a list of cam360 objects, it calls 'estimate_dense_depth' to estimate 
         depth for all cam360 objects in the list.
@@ -102,6 +103,9 @@ def dense_from_cam360list(cam360_list: list, workspace: str, patchmatch_path: st
             
         gpu_index: int
             The index of GPU to run the Patch Matching.
+            
+        geometric_depth: bool
+            Enable geometric filtering.
     """
     if use_view_selection:
         # if enable view selection, reconstruct view by view
@@ -112,7 +116,8 @@ def dense_from_cam360list(cam360_list: list, workspace: str, patchmatch_path: st
                                                patchmatch_path = patchmatch_path, 
                                                views_for_depth = views_for_depth,
                                                use_view_selection = True,
-                                               gpu_index = gpu_index)
+                                               gpu_index = gpu_index,
+                                               use_geometry = geometric_depth)
     else:
         # if disabled view selection, reconstruct all views together
         cam360_list = estimate_dense_depth(cam360_list, 
@@ -121,12 +126,14 @@ def dense_from_cam360list(cam360_list: list, workspace: str, patchmatch_path: st
                                            patchmatch_path = patchmatch_path, 
                                            views_for_depth = views_for_depth,
                                            use_view_selection = False,
-                                           gpu_index = gpu_index)    
+                                           gpu_index = gpu_index,
+                                           use_geometry = geometric_depth)    
     return cam360_list
 
 
-def estimate_dense_depth(cam360_list: list, reference_image: int, workspace: str, patchmatch_path: str, 
-                          views_for_depth: int=4, use_view_selection: bool=False, gpu_index: int=-1):
+def estimate_dense_depth(cam360_list: list, reference_image: int, workspace: str, 
+                         patchmatch_path: str, views_for_depth: int=4, use_view_selection: bool=False, 
+                         gpu_index: int=-1, use_geometry: bool=False):
     """
         Given a list of cam360 objects, it estimates depthmap for the reference image.
     
@@ -167,6 +174,9 @@ def estimate_dense_depth(cam360_list: list, reference_image: int, workspace: str
             
         gpu_index: int
             The index of GPU to run the Patch Matching.
+            
+        use_geometry: bool
+            Enable geometric filtering.
         
         Examples
         --------
@@ -190,6 +200,7 @@ def estimate_dense_depth(cam360_list: list, reference_image: int, workspace: str
         
         check_path_exist(output_path)
         
+        # undistort images and orgnize workspace for dense reconstruction
         command = patchmatch_path + \
                   " image_undistorter" + \
                   " --image_path="  + image_path + \
@@ -202,14 +213,21 @@ def estimate_dense_depth(cam360_list: list, reference_image: int, workspace: str
         # specify the images to be used
         set_patchmatch_cfg(output_path, reference_image, scores_list, view, use_view_selection)
         
+        # start patch matching stereo
         command = patchmatch_path + \
                   " patch_match_stereo" + \
                   " --workspace_path="  + output_path + \
                   " --PatchMatchStereo.depth_min=0"  + \
                   " --PatchMatchStereo.depth_max=500" + \
                   " --PatchMatchStereo.gpu_index={:d}".format(gpu_index) 
+        if use_geometry:
+            command = command + " --PatchMatchStereo.geom_consistency true"
+        else:
+            command = command + " --PatchMatchStereo.geom_consistency false"
+            
         CM = subprocess.Popen(command, shell=True)
         CM.wait()
+            
 
     # collect cubemaps belonging to same omnidirectional images
     print("\n\nReorganizing workspace ...")
