@@ -209,8 +209,7 @@ def estimate_dense_depth(cam360_list: list, reference_image: int, workspace: str
         CM = subprocess.Popen(command, shell=True)
         CM.wait()
         
-        # modify the patch-match.cfg file to set number of source image or 
-        # specify the images to be used
+        # modify the patch-match.cfg file to specify the images to be used
         set_patchmatch_cfg(output_path, reference_image, scores_list, view, use_view_selection)
         
         # start patch matching stereo
@@ -221,9 +220,9 @@ def estimate_dense_depth(cam360_list: list, reference_image: int, workspace: str
                   " --PatchMatchStereo.depth_max=500" + \
                   " --PatchMatchStereo.gpu_index={:d}".format(gpu_index) 
         if use_geometry:
-            command = command + " --PatchMatchStereo.geom_consistency true"
+            command = command + " --PatchMatchStereo.geom_consistency true"     # use geometry filtering
         else:
-            command = command + " --PatchMatchStereo.geom_consistency false"
+            command = command + " --PatchMatchStereo.geom_consistency false"    # only compute the photometric depth
             
         CM = subprocess.Popen(command, shell=True)
         CM.wait()
@@ -236,17 +235,19 @@ def estimate_dense_depth(cam360_list: list, reference_image: int, workspace: str
     # project cubic depth to omnidirectional depthmap
     print("\n\nReprojecting cubic depth to 360 depth ...")
     resolution = [cam360_list[0]._height, cam360_list[0]._width]
-    depth_list = reconstruct_omni_maps(omni_workspace=os.path.join(workspace, 'omni_depthmap/depth_maps/*'), 
-                                       view_to_syn=views_for_depth, 
-                                       maps_type='depth_maps',
-                                       resolution=resolution)
+    depth_list = reconstruct_omni_maps(omni_workspace = os.path.join(workspace, 'omni_depthmap/depth_maps/*'), 
+                                       view_to_syn = views_for_depth, 
+                                       maps_type   = 'depth_maps',
+                                       resolution  = resolution,
+                                       enable_geom = use_geometry)
     
     # project cost maps
     print("\n\nReprojecting cost maps ...")
-    cost_list = reconstruct_omni_maps(omni_workspace=os.path.join(workspace, 'omni_depthmap/cost_maps/*'), 
-                                       view_to_syn=views_for_depth, 
-                                       maps_type='cost_maps',
-                                       resolution=resolution)
+    cost_list = reconstruct_omni_maps(omni_workspace = os.path.join(workspace, 'omni_depthmap/cost_maps/*'), 
+                                      view_to_syn = views_for_depth, 
+                                      maps_type   = 'cost_maps',
+                                      resolution  = resolution,
+                                      enable_geom = use_geometry)
     
     if use_view_selection:
         # save costs and depth of the reference image to the corresponding object
@@ -780,13 +781,13 @@ def organize_workspace(workspace: str):
     check_path_exist(dst_folder)
     
     # reorganize depth maps and cost maps
-    organize_outputs(colmap_ws=depth_path, dst_folder=dst_folder, target = 'depth_maps')
-    organize_outputs(colmap_ws=depth_path, dst_folder=dst_folder, target = 'cost_maps')
+    organize_outputs(colmap_ws=depth_path, dst_folder=dst_folder, target_map = 'depth_maps')
+    organize_outputs(colmap_ws=depth_path, dst_folder=dst_folder, target_map = 'cost_maps')
     
     
-def organize_outputs(colmap_ws: str, dst_folder: str, target: str):
+def organize_outputs(colmap_ws: str, dst_folder: str, target_map: str):
     '''
-        It collect all target files under the colmap_ws to dst_folder according to
+        It collect all target maps under the colmap_ws to dst_folder according to
         filenames.
         
         colmap_ws: str
@@ -795,25 +796,38 @@ def organize_outputs(colmap_ws: str, dst_folder: str, target: str):
         dst_folder: str
             destination folder
             
-        target: str
-            file to be reorganized, e.g. depth_map, cost_map and normal_map
+        target_map: str
+            maps to be reorganized, e.g. depth_map, cost_map and normal_map
     '''
-    for image in sorted(glob.glob( os.path.join(colmap_ws, 'view0/stereo/' + target + '/*.geometric.bin' ))):
-        
+    
+    dir_ = os.path.join(colmap_ws, 'view0/stereo/')
+    map_type = "geometric"
+    map_list = sorted(glob.glob( dir_ + target_map + '/*.{:s}.bin'.format(map_type) ))
+    
+    if len(map_list) == 0:    # no geometric depth map
+        map_type = "photometric"
+        map_list = sorted(glob.glob( dir_ + target_map + '/*.{:s}.bin'.format(map_type) )) 
+    if len(map_list) == 0:
+        raise ValueError(dir_ + " does not contain valid depth maps.")
+    
+    for image in map_list:  
         image_name = image.split('/')[-1].split('.')[0][:-6]
         
         for depth_view in sorted(glob.glob( os.path.join(colmap_ws, 'view*') )):
+           
             view_num = depth_view.split('/')[-1]
-            depth_file = glob.glob( os.path.join(colmap_ws, view_num+'/stereo/' + target + '/{:s}*.geometric.bin'.format(image_name)) )[0]
+            depth_file = glob.glob( os.path.join(colmap_ws, view_num+'/stereo/' + target_map + '/{:s}*.{:s}.bin'.format(image_name, map_type)) )[0]
             
-            dst_path = os.path.join(dst_folder, target + '/{:s}'.format(image_name)) 
+            dst_path = os.path.join(dst_folder, target_map + '/{:s}'.format(image_name)) 
             check_path_exist(dst_path)
             
             copyfile(depth_file, os.path.join(dst_path, '{:s}_{:s}.geometric.bin'.format( image_name, view_num))) 
 
 
-def reconstruct_omni_maps(omni_workspace: str, Camera_parameter: list = None, view_to_syn: int = 6, 
-                          resolution: list = None, maps_type: str = "depth_maps", save_omni: bool = True):
+def reconstruct_omni_maps(omni_workspace: str, Camera_parameter: list = None, 
+                          view_to_syn: int = 6, resolution: list = None, 
+                          maps_type: str = "depth_maps", save_omni: bool = True,
+                          enable_geom: bool=False):
     '''
         It projects depth maps to omnidirectional depth map.
         
@@ -837,19 +851,22 @@ def reconstruct_omni_maps(omni_workspace: str, Camera_parameter: list = None, vi
             
         save_omni: bool
             Whether to save the omnidirectional depth map.
+        
+        enable_geom: bool
+            Enable geometric filtering.
             
     '''
     depth_list = []
     for folder in sorted( glob.glob( omni_workspace )):
         file_name = folder.split('/')[-1]
         omni_depth = project_colmap_maps(path=folder,
-                                          view_name=file_name,
-                                          views_list=[num for num in range(view_to_syn)],
-                                          output_resolution=resolution, 
-                                          use_radial_dist=True, 
-                                          camera_para=Camera_parameter,
-                                          map_type=maps_type,
-                                          save=save_omni)
+                                         view_name=file_name,
+                                         views_list=[num for num in range(view_to_syn)],
+                                         output_resolution=resolution, 
+                                         use_radial_dist=True, 
+                                         camera_para=Camera_parameter,
+                                         map_type=maps_type,
+                                         save=save_omni)
         depth_list.append(omni_depth)
     return depth_list
         
