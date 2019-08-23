@@ -57,14 +57,14 @@ def main():
             raise ValueError("Input ERROR! Input poses should be able to be transposed to an nx12 matrix")
         else:
             poses     = np.array([float(t) for t in poses]).reshape(-1,12)
-            rotations = np.swapaxes(poses[:,:9].reshape(3,3,-1), 0, 2)
+            rotations = poses[:,:9].reshape(-1,3,3)
             translations = poses[:,9:]
             
     for t in range(translations.shape[0]):
         # inv([R,t]) = [R', -R'*t];   R,t: rotation and translation from world to local 
-        translations[t] = - rotations[:,:,t].dot(translations[t])
+        translations[t] = - rotations[t,:,:].dot(translations[t])
         
-    print(rotations[:,:,0], translations)
+    print(rotations[0,:,:], translations)
             
             
     #################################################################################
