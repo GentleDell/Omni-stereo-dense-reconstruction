@@ -76,7 +76,7 @@ def main():
         Omni_img = np.flip(cv2.imread(filename), axis=2)   
         Omni_img = Omni_img/np.max(Omni_img)
         # create a Cam360 object
-        Omni_obj = Cam360(rotation_mtx = rotations[:,:,ind], 
+        Omni_obj = Cam360(rotation_mtx = rotations[ind,:,:], 
                           translation_vec=translations[ind], 
                           height = Omni_img.shape[0], 
                           width  = Omni_img.shape[1], 
