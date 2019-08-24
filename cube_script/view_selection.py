@@ -11,6 +11,7 @@ import numpy as np
 
 from cam360 import Cam360
 from cubicmaps import CubicMaps
+import matplotlib.pyplot as plt
 
 # thresholds to sort candidate views
 MIN_NUM_FEATURE = 15
@@ -19,7 +20,7 @@ MIN_TRIANGULATION = 6*np.pi/180
 
 
 def view_selection(cam:Cam360, reference:np.array, initial_pose: tuple, fov: tuple=(np.pi/2, np.pi/2),
-                   max_iter: int=10, use_filter: bool=True, threshold: float=5.0):
+                   max_iter: int=10, use_filter: bool=True, threshold: float=10.0):
     '''
         It selects a view together with its score that satisfies two criterions:
             1. sharing the maximum overlapping between the referece image and 
@@ -47,7 +48,7 @@ def view_selection(cam:Cam360, reference:np.array, initial_pose: tuple, fov: tup
             The reference image.
             
         initial_pose : tuple
-            The first pose to start the search. (phi, theta)
+            The first pose to start the search. (theta, phi)
             
         fov: tuple
             Field of view of the selected view. 
@@ -63,31 +64,50 @@ def view_selection(cam:Cam360, reference:np.array, initial_pose: tuple, fov: tup
             The threshold to decide whether the reference view and the source 
             view are close enough.
         
+        Return
+        --------
+        source: np.array
+            selected view
+            
+        pose: tuple:
+            (theta, phi)
+            
+        score: float
+            score of the selected view
+        
         Examples
         --------
         >>> img, pose = view_selection(cam360, ref_view, 
-                                       initial_pose=(np.pi*3/2, np.pi/2))
+                                       initial_pose=(np.pi/2, np.pi*3/2))
     '''
     # initialize objs to be used
     orb = cv2.ORB_create()
     cubemaps = CubicMaps()
-    
-    # the size of a pixel
-    unit_x = 1/reference.shape[1]
-    unit_y = 1/reference.shape[0]
     
     # color image to grayscale image
     if reference.max() <= 1:
         reference = np.round(reference*255)
     reference = cv2.cvtColor(reference.astype('uint8'), cv2.COLOR_RGB2GRAY)
     
+    # ATTENTION, here the pose is filipped. [becomes (phi, theta)]
+    initial_pose = (initial_pose[1], initial_pose[0])
+    
     pose = initial_pose
+    phi, theta = pose[0], pose[1]
     for cnt in range(max_iter):
         
         # obtain a source view
         source = cubemaps.cube_projection(cam=cam, direction=(pose + fov), resolution=reference.shape)
         source_gray = cv2.cvtColor( np.round(source*255).astype('uint8'), cv2.COLOR_RGB2GRAY )
-    
+       
+        ##################################
+#        DEMO AND DEBUG
+#        plt.imshow(source)
+#        plt.axis('off')
+#        plt.savefig("view_{:d}.png".format(cnt), bbox_inches='tight')
+#     cubemaps.cube_projection(cam=cam, direction=((3.8,1.57) + fov), resolution=reference.shape)
+        ##################################
+        
         # feature detection and matching
         kp1, des1 = orb.detectAndCompute(reference, None)
         kp2, des2 = orb.detectAndCompute(source_gray, None)
@@ -101,29 +121,44 @@ def view_selection(cam:Cam360, reference:np.array, initial_pose: tuple, fov: tup
             matches = filter_matches(kp1, kp2, matches)
         if len(matches) <= MIN_NUM_FEATURE:
             theta, phi = None, None
-            pose = (np.random.uniform(low=0, high=2*np.pi), np.random.uniform(low=0, high=np.pi))
+            pose = (np.random.normal(loc=initial_pose[0], scale=2.0),
+                    np.random.normal(loc=initial_pose[1], scale=1.0))
+            pose = correct_angles(pose)
             warnings.warn("Can not find enough inlier matches; start random searching")
             continue
         
-        # calculate the distance between centroids
-        centroid_dist = feature_centroid_distance(kp1, kp2, matches, source_gray.shape)
+        ####################
+#        DEMO AND DEBUG
+#        show_matches = cv2.drawMatches(reference, kp1, source_gray, kp2, matches[:20], None, flags=2)
+#        plt.imshow(show_matches)
+#        scoreplt.axis('off')
+#        plt.savefig("matches_iter{:d}.png".format(cnt), bbox_inches='tight')
+        ####################
+        
+        # calculate the centroids
+        centroids = feature_centroid(kp1, kp2, matches, source_gray.shape)
                 
-        if np.sqrt(np.sum(centroid_dist**2)) <= threshold:
+        if np.sqrt(np.sum((centroids[0] - centroids[1])**2)) <= threshold:
             break
         else:
-            # update poses
-            phi = pose[0] - np.arctan(centroid_dist[0]*unit_x)
-            theta = pose[1] - np.arctan(centroid_dist[1]*unit_y)
+            # calculate changes of angle
+            ref_phi, ref_theta = cubemaps.cartesian2spherical(
+                    phi=pose[0], theta=pose[1], 
+                    width_grids = np.array([centroids[0][0], centroids[0][0]])/reference.shape[0],
+                    height_grids= np.array([centroids[0][1], centroids[0][1]])/reference.shape[1]
+                    )
+            src_phi, src_theta = cubemaps.cartesian2spherical(
+                    phi=pose[0], theta=pose[1], 
+                    width_grids = np.array([centroids[1][0], centroids[1][0]])/reference.shape[0],
+                    height_grids= np.array([centroids[1][1], centroids[1][1]])/reference.shape[1]
+                    )
+            delta_phi, delta_theta = ref_phi[0]-src_phi[0], ref_theta[0]-src_theta[0]
             
-            if phi < 0:
-                phi = phi + 2*np.pi
-            elif phi > 2*np.pi:
-                phi = phi - 2*np.pi
-            if theta < 0:
-                theta = -theta
-            elif theta > np.pi:
-                theta = 2*np.pi - theta
-        
+            # update poses
+            phi = pose[0] - delta_phi
+            theta = pose[1] - delta_theta
+            
+            phi,theta = correct_angles((phi, theta))
             pose = (np.asscalar(phi), np.asscalar(theta))
    
     # calculate the score of the selected view
@@ -132,12 +167,31 @@ def view_selection(cam:Cam360, reference:np.array, initial_pose: tuple, fov: tup
         score_overlapping = 1 - ((min(len(matches), MIN_OVERLAPPING) - MIN_OVERLAPPING)**2)/(MIN_OVERLAPPING**2)
         score_triangulation = 1 - ((min(angle, MIN_TRIANGULATION) - MIN_TRIANGULATION)**2)/(MIN_TRIANGULATION**2)
         score = score_overlapping + score_triangulation
+        
+        pose = (pose[1], pose[0]) # convert to (theta, phi)
     else:
         print("Fail to find valid views")
         source, pose, score = None, None, None
     
     return source, pose, score
 
+
+def correct_angles( angles: tuple ):
+    
+    phi   = angles[0]
+    theta = angles[1]
+    
+    if phi < 0:
+        phi = phi + 2*np.pi
+    elif phi > 2*np.pi:
+        phi = phi - 2*np.pi
+    if theta < 0:
+        theta = -theta
+    elif theta > np.pi:
+        theta = 2*np.pi - theta
+        
+    return (phi, theta)
+    
 
 def filter_matches(kp1, kp2, matches):
     '''
@@ -153,7 +207,7 @@ def filter_matches(kp1, kp2, matches):
     return matches_filttered
 
 
-def feature_centroid_distance(kp1, kp2, matches, image_size):
+def feature_centroid(kp1, kp2, matches, image_size):
     '''
         For each group of keypoints, it calculates a weighted centroid and then it computes
         the distance between the two weighted centroids.
@@ -173,7 +227,7 @@ def feature_centroid_distance(kp1, kp2, matches, image_size):
     ref_centroid = np.average(ref_features, weights = weight, axis = 0)
     src_centroid = np.average(src_features, weights = weight, axis = 0)
     
-    return ref_centroid - src_centroid
+    return [ref_centroid, src_centroid]
 
 
 def convert_angle(theta: float, phi: float, initial_pose: list):

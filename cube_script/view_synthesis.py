@@ -8,6 +8,7 @@ Created on Wed Jun 12 22:03:45 2019
 """
 import pickle
 
+import cv2
 import torch
 import warnings
 import numpy as np
@@ -73,7 +74,7 @@ def synthesize_view(cam360_list: list, rotation: np.array, translation: np.array
             the index of gpu to accelerate the function
     '''
     
-    print("projecting pixels of original views to the synthesized view ...")
+    print("projecting pixels from original views to the synthesized view ...")
     projected_view = project_to_view(cam360_list, rotation, translation, resolution)
     
     print("computing the cost and aggregating pixels ...")
@@ -694,6 +695,43 @@ def project(theta: np.array, phi: np.array, depth: np.array,
 
     return theta_proj, phi_proj, depth_proj
 
+
+def evaluation( texture: np.array, texture_GT: np.array, depth:np.array, depth_GT: np.array):
+    min_d_toshow = min(depth.min(), depth_GT.min())
+    max_d_toshow = max(depth.max(), depth_GT.max())
+
+    plt.imshow(texture);
+    plt.axis('off')
+    plt.savefig('synthesized_texture.png', dpi=300, bbox_inches="tight")
+    
+    plt.imshow(texture_GT)
+    plt.axis('off')
+    plt.savefig('Groundtruth_texture.png', dpi=300, bbox_inches="tight")
+
+    plt.imshow(depth, cmap = 'magma', vmin=min_d_toshow, vmax=max_d_toshow);
+    plt.axis('off')
+    plt.savefig('estimated_depthmap.png', dpi=300, bbox_inches="tight")
+    
+    plt.imshow(depth_GT, cmap = 'magma', vmin=min_d_toshow, vmax=max_d_toshow)
+    plt.axis('off')
+    plt.savefig('Groundtruth_depthmap.png', dpi=300, bbox_inches="tight")
+    
+    plt.imshow(abs(depth_GT - depth), cmap = 'magma', vmin=min_d_toshow, vmax=max_d_toshow)
+    plt.colorbar()
+    plt.axis('off')
+    plt.savefig('error_maps.png', dpi=300, bbox_inches="tight")
+
+    diff_map = abs(depth_GT - depth)
+    mask = depth!=depth.min()
+    masked_RMSE = np.sqrt(np.sum(diff_map[mask]**2)/(np.sum(mask)))
+    print('The masked RMSE for depth is:', masked_RMSE )
+    
+    diff_texture = np.abs( cv2.cvtColor(texture_GT.astype('uint8'), cv2.COLOR_RGB2GRAY) - cv2.cvtColor((texture*255).astype('uint8'), cv2.COLOR_RGB2GRAY))
+    rmse = np.sqrt(np.sum(diff_texture[mask]**2)/(np.sum(mask)))
+    psnr = 20 * np.log10(255 / rmse)
+    print('The masked PSNR for texture is:', psnr )
+    
+    print("{:f}% pixels are filled".format(np.sum(mask)/diff_map.size*100))
 
 def printProgressBar (iteration, total, prefix = '', suffix = '', decimals = 1, length = 100, fill = '█'):
     """

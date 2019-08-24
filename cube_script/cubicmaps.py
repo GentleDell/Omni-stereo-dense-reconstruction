@@ -35,7 +35,7 @@ class CubicMaps:
     -   [ 0th:  back  |  1st:  left  |  2nd:  front  |  3rd:  right  |  4th:  top  |  5th:  bottom ].
 
     In particular, for each pixel on the depthmap, it's depth means the distance between the 3D point 
-    to the camera plane. The depthmaps always have only 1 channel.
+    to the camera plane. Depthmaps always have only 1 channel.
     """
     def __init__(self, dist: float = 1):
         """
@@ -701,7 +701,7 @@ class CubicMaps:
             Parameters
             ----------    
             cam: object
-                camera320 object to be projected
+                camera360 object to be projected
                  
             direction: tuple (phi, theta, fov_phi, fov_theta)
                 phi, theta -> the direction of normal line to the tangent plan;
@@ -801,10 +801,10 @@ class CubicMaps:
                 the vertical angle (from positive z axis) of the normal line;
                 
             width_grids: np.array
-                positions of points on the image plane;
+                positions of points on the image plane, [-1,1];
                 
             height_grids: np.array
-                positions of points on the image plane;
+                positions of points on the image plane, [-1,1];
                 
             dist: float
                 distance between the tangent plane and the center of the sphere;
@@ -845,7 +845,7 @@ class CubicMaps:
         theta_grids = np.arccos(zeta_range/np.sqrt(dist**2 + height_grids**2 + width_grids**2))
         phi_grids   = np.arctan2(width_grids,  prj_dist+height_grids*np.cos(theta)) + phi
         
-        # make sure every angle is valid phi: (0,2pi), theta:(0,pi)
+        # make sure every angle is valid:  phi=(0,2pi), theta=(0,pi)
         phi_grids[phi_grids<0] = phi_grids[phi_grids<0] + 2*np.pi
         phi_grids[phi_grids>=2*np.pi] = phi_grids[phi_grids>=2*np.pi] - 2*np.pi
         
