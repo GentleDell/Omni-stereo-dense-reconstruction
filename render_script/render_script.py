@@ -69,7 +69,7 @@ def read_cofig():
                     resolution = [ int(item) for item in line[3:].split(' ') if len(item) > 0 ]
                     
                 elif line[:7].lower() == 'all_gpu':
-                    all_gpu = int(line[4])
+                    all_gpu = int(line[8])
         
     if poses is None:
         raise ValueError('No valid poses')
