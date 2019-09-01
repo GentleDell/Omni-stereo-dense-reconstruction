@@ -194,10 +194,6 @@ def estimate_dense_depth(cam360_list: list, reference_image: int, workspace: str
     score_arr[score_arr == None] = 0
     bad_views = np.sum(score_arr, axis=0) == 2
     
-    if len(cam360_list) < 6:
-        print("wait for image writing")
-        time.sleep(2)
-    
     # run patch matching stereo on each cube views
     print("\n\nExecuting patch match stereo GPU")
     for view in range(views_for_depth):
@@ -317,7 +313,9 @@ def set_patchmatch_cfg(workspace: str, reference_image: int, score_list: list,
     src_image = [ image.split('/')[-1] for image in sorted(glob.glob(path_to_images)) if "_{:d}_".format(reference_image+1) not in image ]
     
     if enable_view_selection:
-        valid_scores = [score[view_ind] for score in score_list if score[view_ind] is not None]     # load valid scores
+        # load valid scores and remove the score of itself 
+        valid_scores = [score[view_ind] for score in score_list if score[view_ind] is not None]     
+        del valid_scores[reference_image]
     else:
         valid_scores = [0]*len(src_image)       # set scores for images 
 

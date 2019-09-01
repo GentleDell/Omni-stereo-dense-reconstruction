@@ -123,12 +123,11 @@ def view_selection(cam:Cam360, reference:np.array, initial_pose: tuple, fov: tup
         # filtering outliers 
         if use_filter:
             matches = filter_matches(kp1, kp2, matches)
-        if len(matches) <= MIN_NUM_FEATURE:
+        if len(matches) <= MIN_NUM_FEATURE:                 # Can not find enough inlier matches; start random searching
             theta, phi = None, None
             pose = (np.random.normal(loc=initial_pose[0], scale=1.0),
                     np.random.normal(loc=initial_pose[1], scale=0.5))
             pose = correct_angles(pose)
-            warnings.warn("Can not find enough inlier matches; start random searching")
             continue
         
         ####################            
@@ -174,7 +173,7 @@ def view_selection(cam:Cam360, reference:np.array, initial_pose: tuple, fov: tup
         
         pose = (pose[1], pose[0]) # convert to (theta, phi)
     else:
-        print("Fail to find valid views")
+        # Fail to find valid views
         source, pose, score = None, None, None
     
     return source, pose, score
