@@ -246,23 +246,15 @@ def estimate_dense_depth(cam360_list: list, reference_image: int, workspace: str
                                       resolution  = resolution,
                                       enable_geom = use_geometry)
     
-    if use_view_selection:
-        # save costs and depth of the reference image to the corresponding object
-        cam360_list[reference_image].depth = depth_list[reference_image][:,:,0]
-        cam360_list[reference_image].cost = cost_list[reference_image][:,:,0]
-        
-        rmtree( os.path.join(workspace, "patch_match_ws") )     # clean workspace
-        rmtree( os.path.join(workspace, "cubemaps/parameters") )    # clean parameters
+    if use_geometry:
+        # save all views at a time
+        for ind, cam in enumerate(cam360_list):
+            cam.depth = depth_list[ind][:,:,0]
+            cam.cost = cost_list[ind][:,:,0]
     else:
-        if use_geometry:
-            # save all views at a time
-            for ind, cam in enumerate(cam360_list):
-                cam.depth = depth_list[ind][:,:,0]
-                cam.cost = cost_list[ind][:,:,0]
-        else:
-            cam360_list[reference_image].depth = depth_list[0][:,:,0]
-            cam360_list[reference_image].cost  = cost_list [0][:,:,0]
-            
+        cam360_list[reference_image].depth = depth_list[0][:,:,0]
+        cam360_list[reference_image].cost  = cost_list [0][:,:,0]
+        
     return cam360_list
 
 
