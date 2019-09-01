@@ -191,7 +191,7 @@ def estimate_dense_depth(cam360_list: list, reference_image: int, workspace: str
                                                     work_dir = workspace, view_selection=use_view_selection)
     score_arr = np.array(scores_list)
     score_arr[score_arr == None] = 0
-    bad_views = np.sum(score_arr, axis=0) == 0
+    bad_views = np.sum(score_arr, axis=0) == 2
     
     
     # run patch matching stereo on each cube views
@@ -510,7 +510,7 @@ def decompose_and_save(cam: Cam360, ref_cam: Cam360, resolution: tuple=None, wor
                 cubemap_obj.cubemap[ind], initial_pose, score = view_selection(cam, reference_cube[ind], 
                                                                                initial_pose=(initial_pose[0], initial_pose[1]))
             else:
-                score = None
+                score = 2
 
             score_list.append(score)
             
