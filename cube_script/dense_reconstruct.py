@@ -17,7 +17,7 @@ from workspace_helper import dense_from_cam360list
 
 
 parser = argparse.ArgumentParser()
-parser.add_argument("--path_to_image"  ,  type=str,  default='../data_demo/dataset', help="Where the 360 imagses are stored")
+parser.add_argument("--path_to_image"  ,  type=str,  default='../data_demo/dataset4', help="Where the 360 imagses are stored")
 
 parser.add_argument("--patchmatch_path",  type=str,  default='../PatchMatchStereo_GPU/build/src/exe/colmap', help="Where is the exectable file of patch matching stereo GPU")
 
@@ -31,7 +31,7 @@ parser.add_argument("--views_for_depth",  type=int , default=6,  help="The numbe
 
 parser.add_argument("--gpu_index",  type=int , default=2,  help="The index of GPU to run the Patch Matching") 
 
-parser.add_argument("--pose_list"      ,  nargs='+', default=['4'],  help="A list of poses corresponding to the given images; e.g. R1,t1,R2,t2,... (from world to local)") 
+parser.add_argument("--pose_list"      ,  nargs='+', default=['1,0,0,0,1,0,0,0,1,-4,-4,1,1,0,0,0,1,0,0,0,1,-4,4,1,1,0,0,0,1,0,0,0,1,4,-4,1,1,0,0,0,1,0,0,0,1,4,4,1'],  help="A list of poses corresponding to the given images; e.g. R1,t1,R2,t2,... (from world to local)") 
 
 parser.add_argument("--geometric_depth" , default=False, action='store_true', help="Estimate geometric depth or photometric depth") 
 

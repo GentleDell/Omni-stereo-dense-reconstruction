@@ -8,6 +8,7 @@ Created on Fri Apr  19 18:39:57 2019
 import os
 import sys
 import glob
+import time
 import warnings
 import subprocess
 from shutil import copyfile, rmtree
@@ -193,6 +194,9 @@ def estimate_dense_depth(cam360_list: list, reference_image: int, workspace: str
     score_arr[score_arr == None] = 0
     bad_views = np.sum(score_arr, axis=0) == 2
     
+    if len(cam360_list) < 6:
+        print("wait for image writing")
+        time.sleep(2)
     
     # run patch matching stereo on each cube views
     print("\n\nExecuting patch match stereo GPU")
