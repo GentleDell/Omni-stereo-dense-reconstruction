@@ -294,8 +294,9 @@ def set_patchmatch_cfg(workspace: str, reference_image: int, score_list: list,
     
     if enable_view_selection:
         # load valid scores and remove the score of itself 
-        valid_scores = [score[view_ind] for score in score_list if score[view_ind] is not None]     
-        del valid_scores[reference_image]
+        scores = [score[view_ind] for score in score_list]     
+        del scores[reference_image]
+        valid_scores = [score for score in scores if score is not None]
     else:
         valid_scores = [0]*len(src_image)       # set scores for images 
 

@@ -23,9 +23,9 @@ parser.add_argument("--patchmatch_path",  type=str,  default='../PatchMatchStere
 
 parser.add_argument("--workspace"      ,  type=str,  default='../data_demo/workspace',  help="Where to store the workspace") 
 
-parser.add_argument("--reference_view" ,  type=int , default=4,  help="The index of the reference view. Only works when view_selection is disabled.") 
+parser.add_argument("--reference_view" ,  type=int , default=2,  help="The index of the reference view. Only works when view_selection is disabled.") 
 
-parser.add_argument("--view_selection" , default=False, action='store_true', help="Select views for dense reconstruction") 
+parser.add_argument("--view_selection" , default=True, action='store_true', help="Select views for dense reconstruction") 
 
 parser.add_argument("--views_for_depth",  type=int , default=6,  help="The number of views to synthesize the 360 depthmap; only 4 and 6 are supported") 
 
