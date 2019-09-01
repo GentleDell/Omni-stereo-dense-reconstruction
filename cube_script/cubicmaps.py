@@ -903,35 +903,26 @@ class CubicMaps:
         
 ###### adapted from colmap ######
     def load_depthmap(self, path_to_file: list, type_: str):
-        if len(path_to_file)==6:
-            if len(self._depthmap) != 0:
-                warnings.warn("Depth maps will be replaced!")
-                self._depthmap = []
-            for ct in range(6):
-                raw_depthmap = read_array(path_to_file[ct])
-                if type_ == 'depth_maps':
-                    depth_map = self.filt_depthoutliers(raw_depthmap)
-                elif type_ == 'cost_maps':
-                    depth_map = np.median(raw_depthmap, axis = 2)
-                self._depthmap.append(np.expand_dims(depth_map, axis = 2))
-                
-        elif len(path_to_file)==4:
-            if len(self._depthmap) != 0:
-                warnings.warn("Depth maps will be replaced!")
-                print('Inputs are treated as back, left, front and righ view')
-                self._depthmap = []
+        if len(self._depthmap) != 0:
+            warnings.warn("Depth maps will be replaced!")
+            print('Input will be arranged according to their names')
+            self._depthmap = []
+        
+        for file in sorted(path_to_file):
+            view_ind = int(file.split('/')[-1].split('.')[0].split('_')[-1][-1])
+            raw_depthmap = read_array(file)
             
-            for ct in range(4):
-                raw_depthmap = read_array(path_to_file[ct])
-                if type_ == 'depth_maps':
-                    depth_map = self.filt_depthoutliers(raw_depthmap)
-                elif type_ == 'cost_maps':
-                    depth_map = np.median(raw_depthmap, axis = 2)
-                self._depthmap.append(np.expand_dims(depth_map, axis = 2))
-            self._depthmap.append(np.zeros(self._depthmap[1].shape))
-            self._depthmap.append(np.zeros(self._depthmap[1].shape))
-        else :
-            raise ValueError('Bad input! Only support 4 and 6 depthmaps.')
+            if type_ == 'depth_maps':
+                depth_map = self.filt_depthoutliers(raw_depthmap)
+            elif type_ == 'cost_maps':
+                depth_map = np.median(raw_depthmap, axis = 2)
+                
+            while view_ind > len(self._depthmap):
+                self._depthmap.append(np.zeros(raw_depthmap.shape))
+            self._depthmap.append(np.expand_dims(depth_map, axis = 2))
+        
+        while 6 > len(self._depthmap):
+                self._depthmap.append(np.zeros(self._depthmap[0].shape))
             
             
     def filt_depthoutliers(self, depth_map: np.array) -> np.array:

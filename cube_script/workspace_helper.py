@@ -189,11 +189,20 @@ def estimate_dense_depth(cam360_list: list, reference_image: int, workspace: str
     # create a workspace for patch matching stereo GPU
     scores_list = create_workspace_from_cam360_list(cam_list=cam360_list, refimage_index=reference_image, number_of_views = views_for_depth,
                                                     work_dir = workspace, view_selection=use_view_selection)
-        
+    score_arr = np.array(scores_list)
+    score_arr[score_arr == None] = 0
+    bad_views = np.sum(score_arr, axis=0) == 0
+    
+    
     # run patch matching stereo on each cube views
     print("\n\nExecuting patch match stereo GPU")
     for view in range(views_for_depth):
         
+        # if a ref view has no selected src view, skip it 
+        if bad_views[view]: 
+            continue
+        
+        # define paths
         input_path = os.path.join(workspace, "cubemaps/parameters/view" + str(view))
         output_path= os.path.join(workspace, "patch_match_ws/view" + str(view))
         image_path = os.path.join(workspace, "cubemaps/view" + str(view))
@@ -210,7 +219,7 @@ def estimate_dense_depth(cam360_list: list, reference_image: int, workspace: str
         CM.wait()
         
         # modify the patch-match.cfg file to specify the images to be used
-        set_patchmatch_cfg(output_path, reference_image, scores_list, view, use_view_selection)
+        set_patchmatch_cfg(output_path, reference_image, scores_list, view, use_view_selection, use_geometry)
         
         # start patch matching stereo
         command = patchmatch_path + \
@@ -230,7 +239,7 @@ def estimate_dense_depth(cam360_list: list, reference_image: int, workspace: str
 
     # collect cubemaps belonging to same omnidirectional images
     print("\n\nReorganizing workspace ...")
-    organize_workspace(workspace=workspace)
+    organize_workspace(workspace=workspace, is_geometric=use_geometry)
 
     # project cubic depth to omnidirectional depthmap
     print("\n\nReprojecting cubic depth to 360 depth ...")
@@ -266,7 +275,7 @@ def estimate_dense_depth(cam360_list: list, reference_image: int, workspace: str
 
 
 def set_patchmatch_cfg(workspace: str, reference_image: int, score_list: list, 
-                       view_ind : int, enable_view_selection: bool):
+                       view_ind : int, enable_view_selection: bool, use_geometry: bool):
     '''
         It keeps the top BEST_OF_N_VIEWS views to reconstruct scenes according
         to the given scores. To reduce computation cost, it only reconstruct 
@@ -287,6 +296,10 @@ def set_patchmatch_cfg(workspace: str, reference_image: int, score_list: list,
             
         view_ind : int
             The index of the current cubic view. Smaller or equal to views_for_depth. 
+        
+        use_geometry: bool
+            Enable geometric filtering.
+        
     '''
     path_to_images = os.path.join(workspace, 'images/*')
     path_to_config = os.path.join(workspace, 'stereo/patch-match.cfg')
@@ -319,18 +332,24 @@ def set_patchmatch_cfg(workspace: str, reference_image: int, score_list: list,
     
     reference = "cam360_{:d}_view{:d}.png".format(reference_image+1, view_ind)
     source = [ image[0] for image in top_n_candidates]
-    config = generate_config(ref=reference, src=source)
+    config = generate_config(ref=reference, src=source, geom = use_geometry)
     
     with open(path_to_config, 'w') as file:
         file.write(config)
         
 
-def generate_config(ref: str, src: list):
+def generate_config(ref: str, src: list, geom: bool):
     '''
         It generates configuration contents.
     '''
     config = ""
-    for cnt in range(len(src) + 1):
+    
+    if geom: 
+        loop = len(src) + 1    # if use geometric filter, colmap needs photometric depth of all images;
+    else:
+        loop = 1               # if not and by default we only want the photometric depth for the ref image;
+        
+    for cnt in range(loop):
         
         new_task = ref + "\n"
         src_img = [ image +', ' for image in src]
@@ -765,7 +784,7 @@ def create_camera_model( path: str = './', camera_para: list = None, camera_size
     return camera_id + 1 + previous_camera
 
 
-def organize_workspace(workspace: str):
+def organize_workspace(workspace: str, is_geometric: bool):
     '''
         For each omnidirectional image, it copies the corresponding cubic depth maps
         to: /workspace/omni_depthmap/image_name
@@ -781,11 +800,11 @@ def organize_workspace(workspace: str):
     check_path_exist(dst_folder)
     
     # reorganize depth maps and cost maps
-    organize_outputs(colmap_ws=depth_path, dst_folder=dst_folder, target_map = 'depth_maps')
-    organize_outputs(colmap_ws=depth_path, dst_folder=dst_folder, target_map = 'cost_maps')
+    organize_outputs(colmap_ws=depth_path, dst_folder=dst_folder, target_map = 'depth_maps', is_geom = is_geometric)
+    organize_outputs(colmap_ws=depth_path, dst_folder=dst_folder, target_map = 'cost_maps', is_geom = is_geometric)
     
     
-def organize_outputs(colmap_ws: str, dst_folder: str, target_map: str):
+def organize_outputs(colmap_ws: str, dst_folder: str, target_map: str, is_geom: bool):
     '''
         It collect all target maps under the colmap_ws to dst_folder according to
         filenames.
@@ -798,30 +817,27 @@ def organize_outputs(colmap_ws: str, dst_folder: str, target_map: str):
             
         target_map: str
             maps to be reorganized, e.g. depth_map, cost_map and normal_map
-    '''
-    
-    dir_ = os.path.join(colmap_ws, 'view0/stereo/')
-    map_type = "geometric"
-    map_list = sorted(glob.glob( dir_ + target_map + '/*.{:s}.bin'.format(map_type) ))
-    
-    if len(map_list) == 0:    # no geometric depth map
+    '''    
+    if is_geom:
+        map_type = "geometric"
+    else:
         map_type = "photometric"
-        map_list = sorted(glob.glob( dir_ + target_map + '/*.{:s}.bin'.format(map_type) )) 
-    if len(map_list) == 0:
-        raise ValueError(dir_ + " does not contain valid depth maps.")
     
-    for image in map_list:  
+    all_maps_path = []
+    all_views = sorted(glob.glob( os.path.join(colmap_ws, 'view*') ))
+    for view in all_views:
+        all_maps_path += glob.glob( os.path.join(view, 'stereo/' + target_map + '/*.{:s}.bin'.format(map_type)) )
+    
+    all_maps_path = sorted(all_maps_path)
+    
+    for image in all_maps_path:  
         image_name = image.split('/')[-1].split('.')[0][:-6]
+        view_index = image.split('/')[-1].split('.')[0][-5:]
+            
+        dst_path = os.path.join(dst_folder, target_map + '/{:s}'.format(image_name)) 
+        check_path_exist(dst_path)
         
-        for depth_view in sorted(glob.glob( os.path.join(colmap_ws, 'view*') )):
-           
-            view_num = depth_view.split('/')[-1]
-            depth_file = glob.glob( os.path.join(colmap_ws, view_num+'/stereo/' + target_map + '/{:s}*.{:s}.bin'.format(image_name, map_type)) )[0]
-            
-            dst_path = os.path.join(dst_folder, target_map + '/{:s}'.format(image_name)) 
-            check_path_exist(dst_path)
-            
-            copyfile(depth_file, os.path.join(dst_path, '{:s}_{:s}.geometric.bin'.format( image_name, view_num))) 
+        copyfile(image, os.path.join(dst_path, '{:s}_{:s}.{:s}.bin'.format( image_name, view_index, map_type))) 
 
 
 def reconstruct_omni_maps(omni_workspace: str, Camera_parameter: list = None, 
@@ -919,9 +935,7 @@ def project_colmap_maps(path: str, view_name: str = None, views_list: list = [],
     elif view_name is None:
         raise ValueError("Input ERROR! Please specify the name of the views to be loaded.")
     else:
-        path_to_file = []
-        for ind in views_list:
-            path_to_file.append( os.path.join(path, view_name + '_view' + str(ind) + '.*'))
+        path_to_file = glob.glob( os.path.join(path, view_name + '_view*') )
     
     cubemap = CubicMaps()
     cubemap.load_depthmap(path_to_file=path_to_file, type_ = map_type)
