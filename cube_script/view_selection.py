@@ -18,6 +18,7 @@ MIN_NUM_FEATURE = 20
 MIN_OVERLAPPING = 45
 MIN_TRIANGULATION = 6*np.pi/180
 
+UPDATE_RATE = 0.1
     
 
 def view_selection(cam:Cam360, reference:np.array, initial_pose: tuple, fov: tuple=(np.pi/2, np.pi/2),
@@ -158,8 +159,8 @@ def view_selection(cam:Cam360, reference:np.array, initial_pose: tuple, fov: tup
             delta_phi, delta_theta = ref_phi[0]-src_phi[0], ref_theta[0]-src_theta[0]
             
             # update poses
-            phi = pose[0] - delta_phi
-            theta = pose[1] - delta_theta
+            phi = pose[0] - UPDATE_RATE*delta_phi
+            theta = pose[1] - UPDATE_RATE*delta_theta
             
             phi,theta = correct_angles((phi, theta))
             pose = (np.asscalar(phi), np.asscalar(theta))
