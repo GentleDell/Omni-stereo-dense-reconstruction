@@ -108,27 +108,15 @@ def dense_from_cam360list(cam360_list: list, workspace: str, patchmatch_path: st
         geometric_depth: bool
             Enable geometric filtering.
     """
-    if use_view_selection:
-        # if enable view selection, reconstruct view by view
-        for cnt in range(len(cam360_list)):
-            cam360_list = estimate_dense_depth(cam360_list, 
-                                               reference_image = cnt,
-                                               workspace = workspace,
-                                               patchmatch_path = patchmatch_path, 
-                                               views_for_depth = views_for_depth,
-                                               use_view_selection = True,
-                                               gpu_index = gpu_index,
-                                               use_geometry = geometric_depth)
-    else:
-        # if disabled view selection, reconstruct all views together
-        cam360_list = estimate_dense_depth(cam360_list, 
-                                           reference_image = reference_view,
-                                           workspace = workspace,
-                                           patchmatch_path = patchmatch_path, 
-                                           views_for_depth = views_for_depth,
-                                           use_view_selection = False,
-                                           gpu_index = gpu_index,
-                                           use_geometry = geometric_depth)    
+    
+    cam360_list = estimate_dense_depth(cam360_list, 
+                                       reference_image = reference_view,
+                                       workspace = workspace,
+                                       patchmatch_path = patchmatch_path, 
+                                       views_for_depth = views_for_depth,
+                                       use_view_selection = use_view_selection,
+                                       gpu_index = gpu_index,
+                                       use_geometry = geometric_depth)    
     return cam360_list
 
 
