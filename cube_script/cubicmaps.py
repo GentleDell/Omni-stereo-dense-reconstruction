@@ -915,7 +915,9 @@ class CubicMaps:
             if type_ == 'depth_maps':
                 depth_map = self.filt_depthoutliers(raw_depthmap)     # (n by n)
             elif type_ == 'cost_maps':
-                depth_map = np.median(raw_depthmap, axis = 2)         # (n by n)
+                if len(raw_depthmap.shape) == 3:  # more than one src views
+                    depth_map = np.median(raw_depthmap, axis = 2)     # (n by n)
+                depth_map = raw_depthmap
                 
             while view_ind > len(self._depthmap):
                 self._depthmap.append(np.zeros( depth_map.shape + (1,) ))
