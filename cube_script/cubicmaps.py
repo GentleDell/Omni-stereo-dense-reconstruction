@@ -913,15 +913,15 @@ class CubicMaps:
             raw_depthmap = read_array(file)
             
             if type_ == 'depth_maps':
-                depth_map = self.filt_depthoutliers(raw_depthmap)
+                depth_map = self.filt_depthoutliers(raw_depthmap)     # (n by n)
             elif type_ == 'cost_maps':
-                depth_map = np.median(raw_depthmap, axis = 2)
+                depth_map = np.median(raw_depthmap, axis = 2)         # (n by n)
                 
             while view_ind > len(self._depthmap):
-                self._depthmap.append(np.zeros(raw_depthmap.shape))
+                self._depthmap.append(np.zeros( depth_map.shape + (1,) ))
             self._depthmap.append(np.expand_dims(depth_map, axis = 2))
         
-        while 6 > len(self._depthmap):
+        while 6 > len(self._depthmap):    # 6 is the number of all cubic maps
                 self._depthmap.append(np.zeros(self._depthmap[0].shape))
             
             

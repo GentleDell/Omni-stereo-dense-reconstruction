@@ -15,7 +15,7 @@ import matplotlib.pyplot as plt
 
 # thresholds to sort candidate views
 MIN_NUM_FEATURE = 20
-MIN_OVERLAPPING = 45
+MIN_OVERLAPPING = 40
 MIN_TRIANGULATION = 6*np.pi/180
 
 UPDATE_RATE = 0.1
@@ -205,7 +205,7 @@ def filter_matches(kp1, kp2, matches):
     src_pts = np.float32([kp1[m.queryIdx].pt for m in matches]).reshape(-1,1,2)
     dst_pts = np.float32([kp2[m.trainIdx].pt for m in matches]).reshape(-1,1,2)
 
-    _, mask = cv2.findFundamentalMat(src_pts, dst_pts, cv2.RANSAC, 1.0)
+    _, mask = cv2.findFundamentalMat(src_pts, dst_pts, cv2.RANSAC, 5.0)
     matches_filttered = [ matches[m] for m in np.where(mask[:,0]==1)[0].tolist() ]
     
     return matches_filttered

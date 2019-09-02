@@ -11,7 +11,7 @@ import glob
 import time
 import warnings
 import subprocess
-from shutil import copyfile, rmtree
+from shutil import copyfile
 from typing import Optional
 
 import cv2
