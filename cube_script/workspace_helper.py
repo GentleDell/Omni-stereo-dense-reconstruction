@@ -418,7 +418,7 @@ def create_workspace_from_cam360_list( cam_list: list, refimage_index: int = -1,
                 warnings.warn("The {:d}th camera360 doesn't have valid textures; it will be skipped".format(ind))
                 continue            
         else:
-            enable_view_selection = (ind!=refimage_index) and view_selection
+            enable_view_selection = (ind!=refimage_index) and view_selection  # not run view selectino on the reference view itself
             
             # decompose omnidirectional image into 6 cubic maps and save them
             scores, camera_txt_flag = decompose_and_save(src_cam, ref_cam, cubemap_resolution, work_dir, prefix="cam360", number_of_views=number_of_views,
@@ -490,8 +490,6 @@ def decompose_and_save(cam: Cam360, ref_cam: Cam360, resolution: tuple=None, wor
             intial_z = np.expand_dims(intial_z, axis=1)
             initial_pose = np.abs(eu2pol(intial_z[0], intial_z[1], intial_z[2]))[:,0][:2]
 
-    # TODO: check here
-
             if select_view:
                 # if enable view selection -- try to refine the initial pose
                 cubemap_obj.cubemap[ind], initial_pose, score = view_selection(cam, reference_cube[ind], 
@@ -501,6 +499,8 @@ def decompose_and_save(cam: Cam360, ref_cam: Cam360, resolution: tuple=None, wor
 
             score_list.append(score)
             
+    # TODO: check here    
+        
             if (not select_view) or (score is not None):
             # if no need to select view or the score of the selected view is not None
                 # save the view

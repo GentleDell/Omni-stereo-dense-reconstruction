@@ -9,6 +9,7 @@ import os
 import glob
 import pickle # for synthesis
 import argparse
+from shutil import rmtree
 
 import cv2 
 import numpy as np
@@ -23,7 +24,7 @@ parser.add_argument("--patchmatch_path",  type=str,  default='../PatchMatchStere
 
 parser.add_argument("--workspace"      ,  type=str,  default='../data_demo/workspace',  help="Where to store the workspace") 
 
-parser.add_argument("--reference_view" ,  type=int , default=2,  help="The index of the reference view.") 
+parser.add_argument("--reference_view" ,  type=int , default=1,  help="The index of the reference view.") 
 
 parser.add_argument("--view_selection" , default=False, action='store_true', help="Select views for dense reconstruction") 
 
@@ -84,6 +85,7 @@ def main():
                           texture= Omni_img)
         cam360_list.append(Omni_obj)
         
+    rmtree(args.workspace)
     cam360_list = dense_from_cam360list(cam360_list, 
                                         workspace = args.workspace,
                                         patchmatch_path = args.patchmatch_path, 
