@@ -950,7 +950,7 @@ def project_colmap_maps(path: str, view_name: str = None, views_list: list = [],
     return cubemap.omnimage
     
 
-def evaluate(estimation: np.array, GT: np.array, checking_line: int = 100, save: bool = False, max_: int = 50):   
+def evaluate(estimation: np.array, GT: np.array, checking_line: int = 100, save: bool = False, max_: int = 25):   
     '''
         It compares the two given images. 
         
@@ -964,9 +964,6 @@ def evaluate(estimation: np.array, GT: np.array, checking_line: int = 100, save:
             
         checking_line: int
             The position of the vertical line along which the depth will be ploted.
-            
-        camera_para: list
-            A list of camera parameters: [fx, fy, cx, cy]
             
         save: bool
             Whether to save the estimated depth map, ground truth as well as the difference map.
@@ -985,20 +982,31 @@ def evaluate(estimation: np.array, GT: np.array, checking_line: int = 100, save:
     min_d_toshow = min(estimation.min(), GT.min())
     max_d_toshow = max(estimation.max(), GT.max())
 
+    # initialize error map and mask 
+    diff_map = abs(estimation - GT)
+    valid_mask   = estimation != estimation.min()  # count all pixels estimated
+    valid_mask_f = np.logical_and(valid_mask, diff_map<max_)   # filter out outliers to evaluate performance
+    
+    # calculate rmse from valid pixels
+    RMSE   = np.sqrt(np.sum(diff_map[valid_mask]**2)/valid_mask.sum())
+    f_RMSE = np.sqrt(np.sum(diff_map[valid_mask_f]**2)/valid_mask_f.sum())
+    print('The raw RMSE is:', RMSE )
+    print('The filtered RMSE is:', f_RMSE)
+
     if not save:
-        plt.subplot(321)
+        plt.subplot(421)
         plt.imshow(estimation, cmap = 'magma', vmin=min_d_toshow, vmax=max_d_toshow);
         plt.colorbar()
         plt.axis('off')
         plt.title('Estimated Depth')
         
-        plt.subplot(322)
+        plt.subplot(422)
         plt.imshow(GT, cmap = 'magma', vmin=min_d_toshow, vmax=max_d_toshow)
         plt.colorbar()
         plt.axis('off')
         plt.title('Ground Truth')
         
-        plt.subplot(323)
+        plt.subplot(423)
         plt.plot(GT[:,checking_line], '.');
         plt.plot(estimation[:,checking_line], '.');
         plt.xlabel('sky ------------------> ground \n Top to Bottom')
@@ -1007,7 +1015,7 @@ def evaluate(estimation: np.array, GT: np.array, checking_line: int = 100, save:
         plt.legend(['ground truth', 'estimation'])
         plt.grid()
     
-        plt.subplot(324)
+        plt.subplot(424)
         errors = abs(GT[:,checking_line] - estimation[:,checking_line])
         errors[errors > 20] = 0
         plt.plot(errors, '.')
@@ -1016,7 +1024,7 @@ def evaluate(estimation: np.array, GT: np.array, checking_line: int = 100, save:
         plt.title('Absolute error along the vertical line at ' + str(checking_line) + 'th column')
         plt.grid()
         
-        plt.subplot(325)
+        plt.subplot(425)
         plt.plot(GT[checking_line,:], '.');
         plt.plot(estimation[checking_line,:], '.');
         plt.xlabel('left ------------------> right \n ')
@@ -1025,7 +1033,7 @@ def evaluate(estimation: np.array, GT: np.array, checking_line: int = 100, save:
         plt.legend(['ground truth', 'estimation'])
         plt.grid()
     
-        plt.subplot(326)
+        plt.subplot(426)
         errors = abs(GT[checking_line,:] - estimation[checking_line,:])
         errors[errors > 20] = 0
         plt.plot(errors, '.')
@@ -1034,6 +1042,22 @@ def evaluate(estimation: np.array, GT: np.array, checking_line: int = 100, save:
         plt.title('Absolute error along the horizontal line at ' + str(checking_line) + 'th row')
         plt.grid()
         plt.tight_layout()
+        
+        # plot error map
+        plt.subplot(427)
+        plt.imshow(np.abs(diff_map), cmap='RdYlGn_r', interpolation='nearest', vmin = 0, vmax = max_)
+        plt.colorbar()
+        plt.axis('off')
+        plt.title('error map', fontsize=12);
+        
+        # plot error histogram
+        plt.subplot(428)
+        plt.hist(diff_map.flatten(), bins=int(max_), histtype="stepfilled", normed=True, alpha=0.6, range=(0, max_))
+        plt.grid(ls='--')
+        plt.xlabel('errors', fontsize=12)
+        plt.ylabel('cumulative percentage', fontsize=12)
+        plt.title('histogram of errors', fontsize=12);
+        
     else:   
         plt.figure()
         plt.imshow(estimation, cmap = 'magma', vmin=min_d_toshow, vmax=max_d_toshow);
@@ -1087,33 +1111,20 @@ def evaluate(estimation: np.array, GT: np.array, checking_line: int = 100, save:
         plt.grid()
         plt.savefig('Absolute_error_along' + str(checking_line) + 'th_row.png', dpi = 300)
     
-    # initialize error map and mask 
-    diff_map = abs(estimation - GT)
-    valid_mask   = estimation != estimation.min()  # count all pixels estimated
-    valid_mask_f = np.logical_and(valid_mask, diff_map<max_/4)   # filter out outliers to evaluate performance
-    
-    # calculate rmse from valid pixels
-    RMSE   = np.sqrt(np.sum(diff_map[valid_mask]**2)/valid_mask.sum())
-    f_RMSE = np.sqrt(np.sum(diff_map[valid_mask_f]**2)/valid_mask_f.sum())
-    print('The raw RMSE is:', RMSE )
-    print('The filtered RMSE is:', f_RMSE)
-
-    # plot error map
-    plt.figure()
-    plt.imshow(np.abs(diff_map), cmap='RdYlGn_r', interpolation='nearest', vmin = 0, vmax = max_)
-    plt.colorbar()
-    plt.axis('off')
-    if save:
+        # plot error map
+        plt.figure(figsize=[8,4])
+        plt.imshow(np.abs(diff_map), cmap='RdYlGn_r', interpolation='nearest', vmin = 0, vmax = max_)
+        plt.colorbar()
+        plt.axis('off')
         plt.savefig('Error_maps.png', dpi=300, bbox_inches="tight")
-    
-    # plot error histogram
-    plt.figure(figsize=[10,6])
-    plt.hist(diff_map.flatten(), bins=int(max_/2), histtype="stepfilled", normed=True, cumulative=True, alpha=0.6)
-    plt.grid(ls='--')
-    plt.xlabel('errors', fontsize=18)
-    plt.ylabel('cumulative percentage', fontsize=18);
-    plt.title('histogram of errors', fontsize=18)
-    if save:
-         plt.savefig('hitrogram_error.png', dpi=300, bbox_inches="tight")
+        
+        # plot error histogram
+        plt.figure(figsize=[8,4])
+        plt.hist(diff_map.flatten(), bins=int(max_), histtype="stepfilled", normed=True, alpha=0.6)
+        plt.grid(ls='--')
+        plt.xlabel('errors', fontsize=18)
+        plt.ylabel('cumulative percentage', fontsize=18)
+        plt.title('histogram of errors', fontsize=18);
+        plt.savefig('hitrogram_error.png', dpi=300, bbox_inches="tight")
          
     return RMSE
