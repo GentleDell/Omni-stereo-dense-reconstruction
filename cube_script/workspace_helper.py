@@ -584,15 +584,15 @@ def convert_coordinate(source_pose: list, reference_pose: list, index_of_cubemap
     # (under world coordinate), which is similar to the coordinate used in cam360.
     #
     # During dense reconstructions, coordinates of reference images are world coords.
-    # Thus, poses for colmap can be calculated as:
-    #       R_refview2srcview = R_src2colmap() * R_src * R_ref.inv() * R_ref2colmap.inv()
-    #       t_refview2srcview = - R_src2colmap() * R_src * R_ref.inv() * t_ref + R_src2colmap * t_src
+    # Thus, poses for colmap can be calculated as: (ref = reference omni; src= source omni)
+    #       R_refview2srcview = R_src2colmap * R_src * R_ref.inv() * R_ref2colmap.inv()
+    #       t_refview2srcview = - R_src2colmap * R_src * R_ref.inv() * t_ref + R_src2colmap * t_src
     
     rotation_refview2world = rotation_ref.transpose().dot( ref_tocolmap.transpose() )
     rotation_world2srcview = src_tocolmap.dot( rotation_src )
     
     ref2src_rot = rotation_world2srcview.dot(rotation_refview2world)
-    quat_rot  = Rotation.from_dcm(ref2src_rot).as_quat() 
+    quat_rot  = Rotation.from_dcm(ref2src_rot.transpose()).as_quat() 
     quat_rot_colmap = [tmp if np.abs(tmp) > EPS else 0.0 for tmp in quat_rot[0:3]]
     quat_rot_colmap.insert(0, quat_rot[3])
     
