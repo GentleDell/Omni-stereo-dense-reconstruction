@@ -592,7 +592,7 @@ def convert_coordinate(source_pose: list, reference_pose: list, index_of_cubemap
     rotation_world2srcview = src_tocolmap.dot( rotation_src )
     
     ref2src_rot = rotation_world2srcview.dot(rotation_refview2world)
-    quat_rot  = Rotation.from_dcm(ref2src_rot.transpose()).as_quat() 
+    quat_rot  = Rotation.from_dcm(ref2src_rot).as_quat() 
     quat_rot_colmap = [tmp if np.abs(tmp) > EPS else 0.0 for tmp in quat_rot[0:3]]
     quat_rot_colmap.insert(0, quat_rot[3])
     
