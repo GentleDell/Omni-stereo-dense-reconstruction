@@ -1,7 +1,7 @@
 # Multi-view 360 Stereo
 
 ## About
-This project is an python implemetation of multiview 360 stereo. 
+This project is an python implemetation of multiview 360 stereo. Details can be found in [this report](https://github.com/GentleDell/Omni-stereo-dense-reconstruction/blob/dev/Multiview%20360%20Stereo.pdf).
 
 To deal with distortions of 360 images and to estimate depth maps, cubic projection is implemented. It decomposes every 360 images into 6 views which can be treated as regular images.Then [patchmatching stereo](https://www.microsoft.com/en-us/research/publication/patchmatch-stereo-stereo-matching-with-slanted-support-windows/) implemented in the [COLMAP](https://colmap.github.io/) is used to estimate depth. To improvethe performance of depth estimation and leverage the rich textures captured by 360 cameras,a view selection method based on similarity and triangulation angle is implemented. Finally,to generate new views at arbitrary poses, a view synthesis algorithm is accomplished, whereindices volumes and costs volumes are defined for pixel-wise selection and texture synthesis. Details of the implementation can be found in (this document)[].
 
@@ -38,56 +38,56 @@ Each workspaec folder is orgnized as follow:
 ```
 workspace                   # can be set by "--workspace=/path/to/workspace"
 │
-├── cubemaps				    # contains all cubic maps, [backward, left, forward, right, up and down], as well as their parameters.
+├── cubemaps                    # contains all cubic maps, [backward, left, forward, right, up and down], as well as their parameters.
 │   │
-│   ├── parameters 			    	# contains parameters
+│   ├── parameters                  # contains parameters
 │   │   │
-│   │   ├── view0					# paramenters for the view0 -- backward view
-│   │   │   ├── cameras.txt					# camera model
-│   │   │   ├── image.txt					# views' poses 
+│   │   ├── view0                       # paramenters for the view0 -- backward view
+│   │   │   ├── cameras.txt                 # camera model
+│   │   │   ├── image.txt                   # views' poses 
 │   │   │   └── points3D.txt                # empty file
-│   │   ├── view1					# paramenters for the view1 -- left view
+│   │   ├── view1                       # paramenters for the view1 -- left view
 │   │   │   ├── cameras.txt
 │   │   │   ├── image.txt
 │   │   │   └── points3D.txt
 │   │   ├── ...
 │   │   │ 
-│   │   └── view5					# paramenters for the view5 -- downward view
+│   │   └── view5                       # paramenters for the view5 -- downward view
 │   │       └── ...
 │   │ 
-│   ├── view0					# all backward views
-│   │   ├── cam360_1_view0.png				# backward view from camera 1
-│   │   ├── cam360_2_view0.png				# backward view from camera 2
+│   ├── view0                       # all backward views
+│   │   ├── cam360_1_view0.png          # backward view from camera 1
+│   │   ├── cam360_2_view0.png          # backward view from camera 2
 │   │   └── ...
-│   ├── view1
-│   │	├── cam360_1_view1.png                  # all left views
+│   ├── view1                       # all left views
+│   │	├── cam360_1_view1.png               
 │   │   ├── cam360_2_view1.png
 │   │   └── ...
 │   ├── ...
 │   │ 
-│   └── view5 					# all downward views
+│   └── view5                       # all downward views
 │       └── ...
 │
-├── omni_depthmap			    # estimated 360 depth maps and cost maps
+├── omni_depthmap               # estimated 360 depth maps and cost maps
 │   │
-│   ├── cost_maps				# cost maps
+│   ├── cost_maps                   # cost maps
 │   │   │
-│   │   ├── cam360_1                   # estimations of camera360_1
-│   │   │   ├── 360_cost_maps.exr				# cost maps of camera360_1
-│   │   │   ├── cam360_1_view0.geometric.bin			# cost maps of the view0 of camera360_1
-│   │   │   ├── cam360_1_view1.geometric.bin			# cost maps of the view1 of camera360_1
+│   │   ├── cam360_1                    # estimations of camera360_1
+│   │   │   ├── 360_cost_maps.exr               # cost maps of camera360_1
+│   │   │   ├── cam360_1_view0.geometric.bin    # cost maps of the view0 of camera360_1
+│   │   │   ├── cam360_1_view1.geometric.bin    # cost maps of the view1 of camera360_1
 │   │   │   ├── ...
-│   │   │   └── cam360_1_view5.geometric.bin			# cost maps of the view5 of camera360_1
+│   │   │   └── cam360_1_view5.geometric.bin    # cost maps of the view5 of camera360_1
 │   │   │
-│   │   ├── cam360_2					# estimations of camera360_2
-│   │   │   ├── 360_cost_maps.exr				# cost maps of camera360_2
-│   │   │   ├── cam360_2_view0.geometric.bin			# cost maps of the view0 of camera360_2
-│   │   │   ├── cam360_2_view1.geometric.bin			# cost maps of the view1 of camera360_2
+│   │   ├── cam360_2                    # estimations of camera360_2
+│   │   │   ├── 360_cost_maps.exr               # cost maps of camera360_2
+│   │   │   ├── cam360_2_view0.geometric.bin    # cost maps of the view0 of camera360_2
+│   │   │   ├── cam360_2_view1.geometric.bin    # cost maps of the view1 of camera360_2
 │   │   │   ├── ...
-│   │   │   └── cam360_2_view5.geometric.bin			# cost maps of the view5 of camera360_2
+│   │   │   └── cam360_2_view5.geometric.bin    # cost maps of the view5 of camera360_2
 │   │   └── ...
 │   │ 
-│   └── depth_maps				# depth maps, with the same structure as the above cost_maps folder
+│   └── depth_maps              # depth maps, with the same structure as the above cost_maps folder
 │       │
 │       ├── cam360_1
 │       │   ├── 360_depth_maps.exr
@@ -103,7 +103,7 @@ workspace                   # can be set by "--workspace=/path/to/workspace"
 │       │   └── cam360_2_view5.geometric.bin
 │       └── ...
 │
-├── patch_match_ws			    # workspace for the patchmatchingstereo_GPU in colmap
+├── patch_match_ws              # workspace for the patchmatchingstereo_GPU in colmap
 │   │
 │   └── colmap workspace
 │
