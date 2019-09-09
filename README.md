@@ -1,9 +1,9 @@
 # Multi-view 360 Stereo
 
 ## About
-This project is an python implemetation of multiview 360 stereo. Details can be found in [this report](https://github.com/GentleDell/Omni-stereo-dense-reconstruction/blob/dev/Multiview%20360%20Stereo.pdf).
+This project is an python implemetation of multiview 360 stereo. Details can be found in [this report](https://github.com/GentleDell/Omni-stereo-dense-reconstruction/blob/master/Multiview%20360%20Stereo.pdf).
 
-To deal with distortions of 360 images and to estimate depth maps, cubic projection is implemented. It decomposes every 360 images into 6 views which can be treated as regular images.Then [patchmatching stereo](https://www.microsoft.com/en-us/research/publication/patchmatch-stereo-stereo-matching-with-slanted-support-windows/) implemented in the [COLMAP](https://colmap.github.io/) is used to estimate depth. To improvethe performance of depth estimation and leverage the rich textures captured by 360 cameras,a view selection method based on similarity and triangulation angle is implemented. Finally,to generate new views at arbitrary poses, a view synthesis algorithm is accomplished, whereindices volumes and costs volumes are defined for pixel-wise selection and texture synthesis. Details of the implementation can be found in (this document)[].
+To deal with distortions of 360 images and to estimate depth maps, cubic projection is implemented. It decomposes every 360 images into 6 views which can be treated as regular images.Then [patchmatching stereo](https://www.microsoft.com/en-us/research/publication/patchmatch-stereo-stereo-matching-with-slanted-support-windows/) implemented in the [COLMAP](https://colmap.github.io/) is used to estimate depth. To improvethe performance of depth estimation and leverage the rich textures captured by 360 cameras,a view selection method based on similarity and triangulation angle is implemented. Finally,to generate new views at arbitrary poses, a view synthesis algorithm is accomplished, whereindices volumes and costs volumes are defined for pixel-wise selection and texture synthesis.
 
 ## How to Use
 ### Prerequisites
@@ -25,7 +25,7 @@ To deal with distortions of 360 images and to estimate depth maps, cubic project
 
 ### Examples
 
-An examples can be found [here](https://github.com/GentleDell/Omni-stereo-dense-reconstruction/blob/dev/cube_script/Tutorials.ipynb), includeing :
+Examples can be found [here](https://github.com/GentleDell/Omni-stereo-dense-reconstruction/blob/master/cube_script/Tutorials.ipynb), includeing :
 1. a simple introduction of the provided cubemap class;
 2. an example for the wrapper of 360 depth map estimation;
 3. an example for the views selection;
