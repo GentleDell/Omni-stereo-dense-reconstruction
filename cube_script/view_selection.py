@@ -14,10 +14,12 @@ from cubicmaps import CubicMaps
 import matplotlib.pyplot as plt
 
 # thresholds to sort candidate views
-MIN_NUM_FEATURE = 15
-MIN_OVERLAPPING = 30
+MIN_NUM_FEATURE = 20
+MIN_OVERLAPPING = 40
 MIN_TRIANGULATION = 6*np.pi/180
 
+UPDATE_RATE = 0.1
+    
 
 def view_selection(cam:Cam360, reference:np.array, initial_pose: tuple, fov: tuple=(np.pi/2, np.pi/2),
                    max_iter: int=10, use_filter: bool=True, threshold: float=10.0):
@@ -111,6 +113,9 @@ def view_selection(cam:Cam360, reference:np.array, initial_pose: tuple, fov: tup
         # feature detection and matching
         kp1, des1 = orb.detectAndCompute(reference, None)
         kp2, des2 = orb.detectAndCompute(source_gray, None)
+        
+#       draw_keypoints(reference, kp1)
+#       draw_keypoints(source_gray, kp2)
     
         bf = cv2.BFMatcher(cv2.NORM_HAMMING, crossCheck=True)
         matches = bf.match(des1, des2)
@@ -119,19 +124,18 @@ def view_selection(cam:Cam360, reference:np.array, initial_pose: tuple, fov: tup
         # filtering outliers 
         if use_filter:
             matches = filter_matches(kp1, kp2, matches)
-        if len(matches) <= MIN_NUM_FEATURE:
+        if len(matches) <= MIN_NUM_FEATURE:                 # Can not find enough inlier matches; start random searching
             theta, phi = None, None
-            pose = (np.random.normal(loc=initial_pose[0], scale=2.0),
-                    np.random.normal(loc=initial_pose[1], scale=1.0))
+            pose = (np.random.normal(loc=initial_pose[0], scale=1.0),
+                    np.random.normal(loc=initial_pose[1], scale=0.5))
             pose = correct_angles(pose)
-            warnings.warn("Can not find enough inlier matches; start random searching")
             continue
         
-        ####################
+        ####################            
 #        DEMO AND DEBUG
 #        show_matches = cv2.drawMatches(reference, kp1, source_gray, kp2, matches[:20], None, flags=2)
 #        plt.imshow(show_matches)
-#        scoreplt.axis('off')
+#        plt.axis('off')
 #        plt.savefig("matches_iter{:d}.png".format(cnt), bbox_inches='tight')
         ####################
         
@@ -155,8 +159,8 @@ def view_selection(cam:Cam360, reference:np.array, initial_pose: tuple, fov: tup
             delta_phi, delta_theta = ref_phi[0]-src_phi[0], ref_theta[0]-src_theta[0]
             
             # update poses
-            phi = pose[0] - delta_phi
-            theta = pose[1] - delta_theta
+            phi = pose[0] - UPDATE_RATE*delta_phi
+            theta = pose[1] - UPDATE_RATE*delta_theta
             
             phi,theta = correct_angles((phi, theta))
             pose = (np.asscalar(phi), np.asscalar(theta))
@@ -170,7 +174,7 @@ def view_selection(cam:Cam360, reference:np.array, initial_pose: tuple, fov: tup
         
         pose = (pose[1], pose[0]) # convert to (theta, phi)
     else:
-        print("Fail to find valid views")
+        # Fail to find valid views
         source, pose, score = None, None, None
     
     return source, pose, score
@@ -201,7 +205,7 @@ def filter_matches(kp1, kp2, matches):
     src_pts = np.float32([kp1[m.queryIdx].pt for m in matches]).reshape(-1,1,2)
     dst_pts = np.float32([kp2[m.trainIdx].pt for m in matches]).reshape(-1,1,2)
 
-    _, mask = cv2.findFundamentalMat(src_pts, dst_pts, cv2.RANSAC, 3.0)
+    _, mask = cv2.findFundamentalMat(src_pts, dst_pts, cv2.RANSAC, 5.0)
     matches_filttered = [ matches[m] for m in np.where(mask[:,0]==1)[0].tolist() ]
     
     return matches_filttered
@@ -246,3 +250,11 @@ def convert_angle(theta: float, phi: float, initial_pose: list):
         angle = np.asscalar(np.arctan( np.sqrt(z**2 + h**2) ))
     
     return angle
+
+
+def draw_keypoints(vis, keypoints, color = (255, 255, 255)):
+    for kp in keypoints:
+        x, y = kp.pt
+        cv2.circle(vis, (int(x), int(y)), 5, color)
+    plt.imshow(vis)
+    plt.show()

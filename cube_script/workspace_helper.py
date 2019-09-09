@@ -8,9 +8,10 @@ Created on Fri Apr  19 18:39:57 2019
 import os
 import sys
 import glob
+import time
 import warnings
 import subprocess
-from shutil import copyfile, rmtree
+from shutil import copyfile
 from typing import Optional
 
 import cv2
@@ -107,27 +108,15 @@ def dense_from_cam360list(cam360_list: list, workspace: str, patchmatch_path: st
         geometric_depth: bool
             Enable geometric filtering.
     """
-    if use_view_selection:
-        # if enable view selection, reconstruct view by view
-        for cnt in range(len(cam360_list)):
-            cam360_list = estimate_dense_depth(cam360_list, 
-                                               reference_image = cnt,
-                                               workspace = workspace,
-                                               patchmatch_path = patchmatch_path, 
-                                               views_for_depth = views_for_depth,
-                                               use_view_selection = True,
-                                               gpu_index = gpu_index,
-                                               use_geometry = geometric_depth)
-    else:
-        # if disabled view selection, reconstruct all views together
-        cam360_list = estimate_dense_depth(cam360_list, 
-                                           reference_image = reference_view,
-                                           workspace = workspace,
-                                           patchmatch_path = patchmatch_path, 
-                                           views_for_depth = views_for_depth,
-                                           use_view_selection = False,
-                                           gpu_index = gpu_index,
-                                           use_geometry = geometric_depth)    
+    
+    cam360_list = estimate_dense_depth(cam360_list, 
+                                       reference_image = reference_view,
+                                       workspace = workspace,
+                                       patchmatch_path = patchmatch_path, 
+                                       views_for_depth = views_for_depth,
+                                       use_view_selection = use_view_selection,
+                                       gpu_index = gpu_index,
+                                       use_geometry = geometric_depth)    
     return cam360_list
 
 
@@ -189,11 +178,19 @@ def estimate_dense_depth(cam360_list: list, reference_image: int, workspace: str
     # create a workspace for patch matching stereo GPU
     scores_list = create_workspace_from_cam360_list(cam_list=cam360_list, refimage_index=reference_image, number_of_views = views_for_depth,
                                                     work_dir = workspace, view_selection=use_view_selection)
-        
+    score_arr = np.array(scores_list)
+    score_arr[score_arr == None] = 0
+    bad_views = np.sum(score_arr, axis=0) == 2
+    
     # run patch matching stereo on each cube views
     print("\n\nExecuting patch match stereo GPU")
     for view in range(views_for_depth):
         
+        # if a ref view has no selected src view, skip it 
+        if bad_views[view]: 
+            continue
+        
+        # define paths
         input_path = os.path.join(workspace, "cubemaps/parameters/view" + str(view))
         output_path= os.path.join(workspace, "patch_match_ws/view" + str(view))
         image_path = os.path.join(workspace, "cubemaps/view" + str(view))
@@ -210,7 +207,7 @@ def estimate_dense_depth(cam360_list: list, reference_image: int, workspace: str
         CM.wait()
         
         # modify the patch-match.cfg file to specify the images to be used
-        set_patchmatch_cfg(output_path, reference_image, scores_list, view, use_view_selection)
+        set_patchmatch_cfg(output_path, reference_image, scores_list, view, use_view_selection, use_geometry)
         
         # start patch matching stereo
         command = patchmatch_path + \
@@ -230,7 +227,7 @@ def estimate_dense_depth(cam360_list: list, reference_image: int, workspace: str
 
     # collect cubemaps belonging to same omnidirectional images
     print("\n\nReorganizing workspace ...")
-    organize_workspace(workspace=workspace)
+    organize_workspace(workspace=workspace, is_geometric=use_geometry)
 
     # project cubic depth to omnidirectional depthmap
     print("\n\nReprojecting cubic depth to 360 depth ...")
@@ -249,24 +246,20 @@ def estimate_dense_depth(cam360_list: list, reference_image: int, workspace: str
                                       resolution  = resolution,
                                       enable_geom = use_geometry)
     
-    if use_view_selection:
-        # save costs and depth of the reference image to the corresponding object
-        cam360_list[reference_image].depth = depth_list[reference_image][:,:,0]
-        cam360_list[reference_image].cost = cost_list[reference_image][:,:,0]
-        
-        rmtree( os.path.join(workspace, "patch_match_ws") )     # clean workspace
-        rmtree( os.path.join(workspace, "cubemaps/parameters") )    # clean parameters
-    else:
+    if use_geometry:
         # save all views at a time
         for ind, cam in enumerate(cam360_list):
             cam.depth = depth_list[ind][:,:,0]
             cam.cost = cost_list[ind][:,:,0]
-       
+    else:
+        cam360_list[reference_image].depth = depth_list[0][:,:,0]
+        cam360_list[reference_image].cost  = cost_list [0][:,:,0]
+        
     return cam360_list
 
 
 def set_patchmatch_cfg(workspace: str, reference_image: int, score_list: list, 
-                       view_ind : int, enable_view_selection: bool):
+                       view_ind : int, enable_view_selection: bool, use_geometry: bool):
     '''
         It keeps the top BEST_OF_N_VIEWS views to reconstruct scenes according
         to the given scores. To reduce computation cost, it only reconstruct 
@@ -287,6 +280,10 @@ def set_patchmatch_cfg(workspace: str, reference_image: int, score_list: list,
             
         view_ind : int
             The index of the current cubic view. Smaller or equal to views_for_depth. 
+        
+        use_geometry: bool
+            Enable geometric filtering.
+        
     '''
     path_to_images = os.path.join(workspace, 'images/*')
     path_to_config = os.path.join(workspace, 'stereo/patch-match.cfg')
@@ -296,7 +293,10 @@ def set_patchmatch_cfg(workspace: str, reference_image: int, score_list: list,
     src_image = [ image.split('/')[-1] for image in sorted(glob.glob(path_to_images)) if "_{:d}_".format(reference_image+1) not in image ]
     
     if enable_view_selection:
-        valid_scores = [score[view_ind] for score in score_list if score[view_ind] is not None]     # load valid scores
+        # load valid scores and remove the score of itself 
+        scores = [score[view_ind] for score in score_list]     
+        del scores[reference_image]
+        valid_scores = [score for score in scores if score is not None]
     else:
         valid_scores = [0]*len(src_image)       # set scores for images 
 
@@ -319,18 +319,24 @@ def set_patchmatch_cfg(workspace: str, reference_image: int, score_list: list,
     
     reference = "cam360_{:d}_view{:d}.png".format(reference_image+1, view_ind)
     source = [ image[0] for image in top_n_candidates]
-    config = generate_config(ref=reference, src=source)
+    config = generate_config(ref=reference, src=source, geom = use_geometry)
     
     with open(path_to_config, 'w') as file:
         file.write(config)
         
 
-def generate_config(ref: str, src: list):
+def generate_config(ref: str, src: list, geom: bool):
     '''
         It generates configuration contents.
     '''
     config = ""
-    for cnt in range(len(src) + 1):
+    
+    if geom: 
+        loop = len(src) + 1    # if use geometric filter, colmap needs photometric depth of all images;
+    else:
+        loop = 1               # if not and by default we only want the photometric depth for the ref image;
+        
+    for cnt in range(loop):
         
         new_task = ref + "\n"
         src_img = [ image +', ' for image in src]
@@ -412,7 +418,7 @@ def create_workspace_from_cam360_list( cam_list: list, refimage_index: int = -1,
                 warnings.warn("The {:d}th camera360 doesn't have valid textures; it will be skipped".format(ind))
                 continue            
         else:
-            enable_view_selection = (ind!=refimage_index) and view_selection
+            enable_view_selection = (ind!=refimage_index) and view_selection  # not run view selectino on the reference view itself
             
             # decompose omnidirectional image into 6 cubic maps and save them
             scores, camera_txt_flag = decompose_and_save(src_cam, ref_cam, cubemap_resolution, work_dir, prefix="cam360", number_of_views=number_of_views,
@@ -484,17 +490,17 @@ def decompose_and_save(cam: Cam360, ref_cam: Cam360, resolution: tuple=None, wor
             intial_z = np.expand_dims(intial_z, axis=1)
             initial_pose = np.abs(eu2pol(intial_z[0], intial_z[1], intial_z[2]))[:,0][:2]
 
-    # TODO: check here
-
             if select_view:
                 # if enable view selection -- try to refine the initial pose
                 cubemap_obj.cubemap[ind], initial_pose, score = view_selection(cam, reference_cube[ind], 
                                                                                initial_pose=(initial_pose[0], initial_pose[1]))
             else:
-                score = None
+                score = 2
 
             score_list.append(score)
             
+    # TODO: check here    
+        
             if (not select_view) or (score is not None):
             # if no need to select view or the score of the selected view is not None
                 # save the view
@@ -578,9 +584,9 @@ def convert_coordinate(source_pose: list, reference_pose: list, index_of_cubemap
     # (under world coordinate), which is similar to the coordinate used in cam360.
     #
     # During dense reconstructions, coordinates of reference images are world coords.
-    # Thus, poses for colmap can be calculated as:
-    #       R_refview2srcview = R_src2colmap() * R_src * R_ref.inv() * R_ref2colmap.inv()
-    #       t_refview2srcview = - R_src2colmap() * R_src * R_ref.inv() * t_ref + R_src2colmap * t_src
+    # Thus, poses for colmap can be calculated as: (ref = reference omni; src= source omni)
+    #       R_refview2srcview = R_src2colmap * R_src * R_ref.inv() * R_ref2colmap.inv()
+    #       t_refview2srcview = - R_src2colmap * R_src * R_ref.inv() * t_ref + R_src2colmap * t_src
     
     rotation_refview2world = rotation_ref.transpose().dot( ref_tocolmap.transpose() )
     rotation_world2srcview = src_tocolmap.dot( rotation_src )
@@ -765,7 +771,7 @@ def create_camera_model( path: str = './', camera_para: list = None, camera_size
     return camera_id + 1 + previous_camera
 
 
-def organize_workspace(workspace: str):
+def organize_workspace(workspace: str, is_geometric: bool):
     '''
         For each omnidirectional image, it copies the corresponding cubic depth maps
         to: /workspace/omni_depthmap/image_name
@@ -781,11 +787,11 @@ def organize_workspace(workspace: str):
     check_path_exist(dst_folder)
     
     # reorganize depth maps and cost maps
-    organize_outputs(colmap_ws=depth_path, dst_folder=dst_folder, target_map = 'depth_maps')
-    organize_outputs(colmap_ws=depth_path, dst_folder=dst_folder, target_map = 'cost_maps')
+    organize_outputs(colmap_ws=depth_path, dst_folder=dst_folder, target_map = 'depth_maps', is_geom = is_geometric)
+    organize_outputs(colmap_ws=depth_path, dst_folder=dst_folder, target_map = 'cost_maps', is_geom = is_geometric)
     
     
-def organize_outputs(colmap_ws: str, dst_folder: str, target_map: str):
+def organize_outputs(colmap_ws: str, dst_folder: str, target_map: str, is_geom: bool):
     '''
         It collect all target maps under the colmap_ws to dst_folder according to
         filenames.
@@ -798,30 +804,27 @@ def organize_outputs(colmap_ws: str, dst_folder: str, target_map: str):
             
         target_map: str
             maps to be reorganized, e.g. depth_map, cost_map and normal_map
-    '''
-    
-    dir_ = os.path.join(colmap_ws, 'view0/stereo/')
-    map_type = "geometric"
-    map_list = sorted(glob.glob( dir_ + target_map + '/*.{:s}.bin'.format(map_type) ))
-    
-    if len(map_list) == 0:    # no geometric depth map
+    '''    
+    if is_geom:
+        map_type = "geometric"
+    else:
         map_type = "photometric"
-        map_list = sorted(glob.glob( dir_ + target_map + '/*.{:s}.bin'.format(map_type) )) 
-    if len(map_list) == 0:
-        raise ValueError(dir_ + " does not contain valid depth maps.")
     
-    for image in map_list:  
+    all_maps_path = []
+    all_views = sorted(glob.glob( os.path.join(colmap_ws, 'view*') ))
+    for view in all_views:
+        all_maps_path += glob.glob( os.path.join(view, 'stereo/' + target_map + '/*.{:s}.bin'.format(map_type)) )
+    
+    all_maps_path = sorted(all_maps_path)
+    
+    for image in all_maps_path:  
         image_name = image.split('/')[-1].split('.')[0][:-6]
+        view_index = image.split('/')[-1].split('.')[0][-5:]
+            
+        dst_path = os.path.join(dst_folder, target_map + '/{:s}'.format(image_name)) 
+        check_path_exist(dst_path)
         
-        for depth_view in sorted(glob.glob( os.path.join(colmap_ws, 'view*') )):
-           
-            view_num = depth_view.split('/')[-1]
-            depth_file = glob.glob( os.path.join(colmap_ws, view_num+'/stereo/' + target_map + '/{:s}*.{:s}.bin'.format(image_name, map_type)) )[0]
-            
-            dst_path = os.path.join(dst_folder, target_map + '/{:s}'.format(image_name)) 
-            check_path_exist(dst_path)
-            
-            copyfile(depth_file, os.path.join(dst_path, '{:s}_{:s}.geometric.bin'.format( image_name, view_num))) 
+        copyfile(image, os.path.join(dst_path, '{:s}_{:s}.{:s}.bin'.format( image_name, view_index, map_type))) 
 
 
 def reconstruct_omni_maps(omni_workspace: str, Camera_parameter: list = None, 
@@ -919,9 +922,7 @@ def project_colmap_maps(path: str, view_name: str = None, views_list: list = [],
     elif view_name is None:
         raise ValueError("Input ERROR! Please specify the name of the views to be loaded.")
     else:
-        path_to_file = []
-        for ind in views_list:
-            path_to_file.append( os.path.join(path, view_name + '_view' + str(ind) + '.*'))
+        path_to_file = glob.glob( os.path.join(path, view_name + '_view*') )
     
     cubemap = CubicMaps()
     cubemap.load_depthmap(path_to_file=path_to_file, type_ = map_type)
@@ -949,7 +950,7 @@ def project_colmap_maps(path: str, view_name: str = None, views_list: list = [],
     return cubemap.omnimage
     
 
-def evaluate(estimation: np.array, GT: np.array, checking_line: int = 100, save: bool = False, max_: int = 50):   
+def evaluate(estimation: np.array, GT: np.array, checking_line: int = 100, save: bool = False, max_: int = 25):   
     '''
         It compares the two given images. 
         
@@ -963,9 +964,6 @@ def evaluate(estimation: np.array, GT: np.array, checking_line: int = 100, save:
             
         checking_line: int
             The position of the vertical line along which the depth will be ploted.
-            
-        camera_para: list
-            A list of camera parameters: [fx, fy, cx, cy]
             
         save: bool
             Whether to save the estimated depth map, ground truth as well as the difference map.
@@ -984,20 +982,31 @@ def evaluate(estimation: np.array, GT: np.array, checking_line: int = 100, save:
     min_d_toshow = min(estimation.min(), GT.min())
     max_d_toshow = max(estimation.max(), GT.max())
 
+    # initialize error map and mask 
+    diff_map = abs(estimation - GT)
+    valid_mask   = estimation != estimation.min()  # count all pixels estimated
+    valid_mask_f = np.logical_and(valid_mask, diff_map<max_)   # filter out outliers to evaluate performance
+    
+    # calculate rmse from valid pixels
+    RMSE   = np.sqrt(np.sum(diff_map[valid_mask]**2)/valid_mask.sum())
+    f_RMSE = np.sqrt(np.sum(diff_map[valid_mask_f]**2)/valid_mask_f.sum())
+    print('The raw RMSE is:', RMSE )
+    print('The filtered RMSE is:', f_RMSE)
+
     if not save:
-        plt.subplot(321)
+        plt.subplot(421)
         plt.imshow(estimation, cmap = 'magma', vmin=min_d_toshow, vmax=max_d_toshow);
         plt.colorbar()
         plt.axis('off')
         plt.title('Estimated Depth')
         
-        plt.subplot(322)
+        plt.subplot(422)
         plt.imshow(GT, cmap = 'magma', vmin=min_d_toshow, vmax=max_d_toshow)
         plt.colorbar()
         plt.axis('off')
         plt.title('Ground Truth')
         
-        plt.subplot(323)
+        plt.subplot(423)
         plt.plot(GT[:,checking_line], '.');
         plt.plot(estimation[:,checking_line], '.');
         plt.xlabel('sky ------------------> ground \n Top to Bottom')
@@ -1006,7 +1015,7 @@ def evaluate(estimation: np.array, GT: np.array, checking_line: int = 100, save:
         plt.legend(['ground truth', 'estimation'])
         plt.grid()
     
-        plt.subplot(324)
+        plt.subplot(424)
         errors = abs(GT[:,checking_line] - estimation[:,checking_line])
         errors[errors > 20] = 0
         plt.plot(errors, '.')
@@ -1015,7 +1024,7 @@ def evaluate(estimation: np.array, GT: np.array, checking_line: int = 100, save:
         plt.title('Absolute error along the vertical line at ' + str(checking_line) + 'th column')
         plt.grid()
         
-        plt.subplot(325)
+        plt.subplot(425)
         plt.plot(GT[checking_line,:], '.');
         plt.plot(estimation[checking_line,:], '.');
         plt.xlabel('left ------------------> right \n ')
@@ -1024,7 +1033,7 @@ def evaluate(estimation: np.array, GT: np.array, checking_line: int = 100, save:
         plt.legend(['ground truth', 'estimation'])
         plt.grid()
     
-        plt.subplot(326)
+        plt.subplot(426)
         errors = abs(GT[checking_line,:] - estimation[checking_line,:])
         errors[errors > 20] = 0
         plt.plot(errors, '.')
@@ -1033,6 +1042,22 @@ def evaluate(estimation: np.array, GT: np.array, checking_line: int = 100, save:
         plt.title('Absolute error along the horizontal line at ' + str(checking_line) + 'th row')
         plt.grid()
         plt.tight_layout()
+        
+        # plot error map
+        plt.subplot(427)
+        plt.imshow(np.abs(diff_map), cmap='RdYlGn_r', interpolation='nearest', vmin = 0, vmax = max_)
+        plt.colorbar()
+        plt.axis('off')
+        plt.title('error map', fontsize=12);
+        
+        # plot error histogram
+        plt.subplot(428)
+        plt.hist(diff_map.flatten(), bins=int(max_), histtype="stepfilled", normed=True, alpha=0.6, range=(0, max_))
+        plt.grid(ls='--')
+        plt.xlabel('errors', fontsize=12)
+        plt.ylabel('cumulative percentage', fontsize=12)
+        plt.title('histogram of errors', fontsize=12);
+        
     else:   
         plt.figure()
         plt.imshow(estimation, cmap = 'magma', vmin=min_d_toshow, vmax=max_d_toshow);
@@ -1086,33 +1111,20 @@ def evaluate(estimation: np.array, GT: np.array, checking_line: int = 100, save:
         plt.grid()
         plt.savefig('Absolute_error_along' + str(checking_line) + 'th_row.png', dpi = 300)
     
-    # initialize error map and mask 
-    diff_map = abs(estimation - GT)
-    valid_mask   = estimation != estimation.min()  # count all pixels estimated
-    valid_mask_f = np.logical_and(valid_mask, diff_map<max_/4)   # filter out outliers to evaluate performance
-    
-    # calculate rmse from valid pixels
-    RMSE   = np.sqrt(np.sum(diff_map[valid_mask]**2)/valid_mask.sum())
-    f_RMSE = np.sqrt(np.sum(diff_map[valid_mask_f]**2)/valid_mask_f.sum())
-    print('The raw RMSE is:', RMSE )
-    print('The filtered RMSE is:', f_RMSE)
-
-    # plot error map
-    plt.figure()
-    plt.imshow(np.abs(diff_map), cmap='RdYlGn_r', interpolation='nearest', vmin = 0, vmax = max_)
-    plt.colorbar()
-    plt.axis('off')
-    if save:
+        # plot error map
+        plt.figure(figsize=[8,4])
+        plt.imshow(np.abs(diff_map), cmap='RdYlGn_r', interpolation='nearest', vmin = 0, vmax = max_)
+        plt.colorbar()
+        plt.axis('off')
         plt.savefig('Error_maps.png', dpi=300, bbox_inches="tight")
-    
-    # plot error histogram
-    plt.figure(figsize=[10,6])
-    plt.hist(diff_map.flatten(), bins=int(max_/2), histtype="stepfilled", normed=True, cumulative=True, alpha=0.6)
-    plt.grid(ls='--')
-    plt.xlabel('errors', fontsize=18)
-    plt.ylabel('cumulative percentage', fontsize=18);
-    plt.title('histogram of errors', fontsize=18)
-    if save:
-         plt.savefig('hitrogram_error.png', dpi=300, bbox_inches="tight")
+        
+        # plot error histogram
+        plt.figure(figsize=[8,4])
+        plt.hist(diff_map.flatten(), bins=int(max_), histtype="stepfilled", normed=True, alpha=0.6)
+        plt.grid(ls='--')
+        plt.xlabel('errors', fontsize=18)
+        plt.ylabel('cumulative percentage', fontsize=18)
+        plt.title('histogram of errors', fontsize=18);
+        plt.savefig('hitrogram_error.png', dpi=300, bbox_inches="tight")
          
     return RMSE
