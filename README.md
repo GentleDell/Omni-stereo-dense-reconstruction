@@ -131,4 +131,4 @@ Then please make sure the input poses are correct i.e. from world to local when 
 Finally, if you enabled view selection, please try to disable view selection and run it again, since the view selection needs rich texture to run correctly.
 
 **3.It reports an error after printing "Reprojecting cost maps ..."**<br>
-Please check whether the original colmap is used for dense reconstruction. Since the original colmap does not output cost maps, there will be errors when projecting cost maps to 360camera sphere. But this error does not affect the depth.
+Please check whether the original COLMAP is used for dense reconstruction. Since the original COLMAP does not output cost maps, there will be an error when projecting cost maps to 360camera sphere. But this error does not affect depth maps.
