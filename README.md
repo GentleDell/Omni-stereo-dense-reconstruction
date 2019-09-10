@@ -120,15 +120,15 @@ In cam360 class, rotation R is from WORLD to CAMERA; translation t is from CAMER
 The dense_reconstruction.py generate the omni_depthmap folder and save all cost maps and depth maps to it. Both of depth and cost maps are stored in .exr file which can be read by [OpenCV](https://opencv.org) imread, with cv2.IMREAD_ANYDEPTH being set. 
 
 ## Possible Errors
-1. 'timeout' error from GPU when running this project on command line.
+1. 'timeout' error from GPU when running this project on command line.<br>
 The reason can be found [here](https://colmap.github.io/faq.html#fix-gpu-freezes-and-timeouts-during-dense-reconstruction). You can run this project in Jupyter notebook, provided GPU memory is enough. If GPU memory is not enough, it is recommended to run this project on a server.
 
-2. Depth map has only one/two/three etc. views.
+2. Depth map has only one/two/three etc. views.<br>
 Firstly, please check the variable "views_for_depth". It should be set to 4 or 6. 
 
 Then please make sure the input poses are correct i.e. from world to local when using the command line; from camera to world when using "dense_from_cam360list()". 
 
 Finally, if you enabled view selection, please try to disable view selection and run it again, since the view selection needs rich texture to run correctly.
 
-3. It reports an error after printing "Reprojecting cost maps ..."
+3. It reports an error after printing "Reprojecting cost maps ..."<br>
 Please check whether the original colmap is used for dense reconstruction. Since the original colmap does not output cost maps, there will be errors when projecting cost maps to 360camera sphere. But this error does not affect the depth.
