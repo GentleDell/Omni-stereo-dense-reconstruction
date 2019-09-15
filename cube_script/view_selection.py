@@ -18,7 +18,7 @@ MIN_NUM_FEATURE = 20
 MIN_OVERLAPPING = 40
 MIN_TRIANGULATION = 6*np.pi/180
 
-UPDATE_RATE = 0.1
+UPDATE_RATE = 1.0
     
 
 def view_selection(cam:Cam360, reference:np.array, initial_pose: tuple, fov: tuple=(np.pi/2, np.pi/2),
@@ -94,6 +94,9 @@ def view_selection(cam:Cam360, reference:np.array, initial_pose: tuple, fov: tup
     # ATTENTION, here the pose is filipped. [becomes (phi, theta)]
     initial_pose = (initial_pose[1], initial_pose[0])
     
+#    unit_x = 1/reference.shape[1]
+#    unit_y = 1/reference.shape[0]
+    
     pose = initial_pose
     phi, theta = pose[0], pose[1]
     for cnt in range(max_iter):
@@ -164,7 +167,7 @@ def view_selection(cam:Cam360, reference:np.array, initial_pose: tuple, fov: tup
             
             phi,theta = correct_angles((phi, theta))
             pose = (np.asscalar(phi), np.asscalar(theta))
-   
+            
     # calculate the score of the selected view
     angle = convert_angle(theta, phi, initial_pose)
     if angle is not None:

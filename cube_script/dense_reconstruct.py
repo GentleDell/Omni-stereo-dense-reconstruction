@@ -9,7 +9,6 @@ import os
 import glob
 import pickle # for synthesis
 import argparse
-from shutil import rmtree
 
 import cv2 
 import numpy as np
@@ -63,8 +62,11 @@ def main():
             translations = poses[:,9:]
             
     for t in range(translations.shape[0]):
-        # inv([R,t]) = [R', -R'*t];   R,t: rotation and translation from world to local 
-        translations[t] = - rotations[t,:,:].dot(translations[t])
+        # In cam360, rotation R is from WORLD to CAMERA (R_w2c), t is from CAMERA to WORLD expressed in camera (t_c2w). Combining R_w2c & t_c2w
+        # we have [R_w2c, t_c2w] which represents the transformation from world to camera, i.e. vec_cam = [R_w2c, t_c2w] * vec_w.
+        # However, in the blender, t is from WORLD to CAMERA expressed in world (t_w2c), so we have to convert it to the one used 
+        # in Cam360 and COLMAP. Since [R_w2c, t_c2w] = inv([R_c2w, t_w2c]) = [R_c2w', -R_c2w'*t_w2c] = [R_w2c, -R_w2c*t_c2w], we have:
+        translations[t] = - rotations[t,:,:].dot(translations[t])  # t_c2w = -R_w2c*t_c2w
         
     print(rotations[0,:,:])
     print(translations)
@@ -87,7 +89,6 @@ def main():
                           texture= Omni_img)
         cam360_list.append(Omni_obj)
         
-    rmtree(args.workspace)
     cam360_list = dense_from_cam360list(cam360_list, 
                                         workspace = args.workspace,
                                         patchmatch_path = args.patchmatch_path, 

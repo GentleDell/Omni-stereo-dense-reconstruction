@@ -9,8 +9,10 @@ import os
 import sys
 import glob
 import time
+import pickle
 import warnings
 import subprocess
+from shutil import rmtree
 from shutil import copyfile
 from typing import Optional
 
@@ -71,7 +73,14 @@ VIEW_ROT = np.array([[[-1,0,0], [0,0,-1], [0,-1,0]],
                      [[ 1,0,0], [0, 1,0], [0,0, 1]],
                      [[ 1,0,0], [0,-1,0], [0,0,-1]]])
 
-BEST_OF_N_VIEWS = 10
+VIEW_ANG = np.array([[np.pi/2,    0   ],
+                     [np.pi/2, np.pi/2],
+                     [np.pi/2, np.pi  ],
+                     [np.pi/2, np.pi*3/2,],
+                     [   0   , np.pi  ],
+                     [ np.pi , np.pi  ]])
+
+BEST_OF_N_VIEWS = 20
 
 
 def dense_from_cam360list(cam360_list: list, workspace: str, patchmatch_path: str, 
@@ -108,6 +117,9 @@ def dense_from_cam360list(cam360_list: list, workspace: str, patchmatch_path: st
         geometric_depth: bool
             Enable geometric filtering.
     """
+    # clean existing workspace
+    if os.path.isdir(workspace):
+        rmtree(workspace)
     
     cam360_list = estimate_dense_depth(cam360_list, 
                                        reference_image = reference_view,
@@ -176,19 +188,12 @@ def estimate_dense_depth(cam360_list: list, reference_image: int, workspace: str
                                   views_for_depth = 4)
     """
     # create a workspace for patch matching stereo GPU
-    scores_list = create_workspace_from_cam360_list(cam_list=cam360_list, refimage_index=reference_image, number_of_views = views_for_depth,
+    scores_list, name_list = create_workspace_from_cam360_list(cam_list=cam360_list, refimage_index=reference_image, number_of_views = views_for_depth,
                                                     work_dir = workspace, view_selection=use_view_selection)
-    score_arr = np.array(scores_list)
-    score_arr[score_arr == None] = 0
-    bad_views = np.sum(score_arr, axis=0) == 2
-    
+
     # run patch matching stereo on each cube views
     print("\n\nExecuting patch match stereo GPU")
     for view in range(views_for_depth):
-        
-        # if a ref view has no selected src view, skip it 
-        if bad_views[view]: 
-            continue
         
         # define paths
         input_path = os.path.join(workspace, "cubemaps/parameters/view" + str(view))
@@ -207,7 +212,7 @@ def estimate_dense_depth(cam360_list: list, reference_image: int, workspace: str
         CM.wait()
         
         # modify the patch-match.cfg file to specify the images to be used
-        set_patchmatch_cfg(output_path, reference_image, scores_list, view, use_view_selection, use_geometry)
+        set_patchmatch_cfg(output_path, reference_image, scores_list, name_list, view, use_view_selection, use_geometry)
         
         # start patch matching stereo
         command = patchmatch_path + \
@@ -245,20 +250,28 @@ def estimate_dense_depth(cam360_list: list, reference_image: int, workspace: str
                                       maps_type   = 'cost_maps',
                                       resolution  = resolution,
                                       enable_geom = use_geometry)
-    
+
+    world2ref = cam360_list[reference_image].rotation_mtx
     if use_geometry:
-        # save all views at a time
+        # save all views at a time        
         for ind, cam in enumerate(cam360_list):
-            cam.depth = depth_list[ind][:,:,0]
-            cam.cost = cost_list[ind][:,:,0]
-    else:
+            depth = Cam360(rotation_mtx = np.eye(3), translation_vec=np.array([0,0,0]), 
+                   height = depth_list[ind].shape[0], width = depth_list[ind].shape[1], channels = depth_list[ind].shape[2], 
+                   texture= depth_list[ind][:,:,0]/255)
+            
+            cost = Cam360(rotation_mtx = np.eye(3), translation_vec=np.array([0,0,0]), 
+                   height = cost_list[ind].shape[0], width = cost_list[ind].shape[1], channels = cost_list[ind].shape[2], 
+                   texture= cost_list[ind][:,:,0]/255)
+        
+            cam.depth = depth.rotate( cam.rotation_mtx.dot(world2ref.transpose()) ).texture[:,:,0]*255
+            cam.cost  = cost.rotate ( cam.rotation_mtx.dot(world2ref.transpose()) ).texture[:,:,0]*255
+    else:        
         cam360_list[reference_image].depth = depth_list[0][:,:,0]
         cam360_list[reference_image].cost  = cost_list [0][:,:,0]
         
     return cam360_list
 
-
-def set_patchmatch_cfg(workspace: str, reference_image: int, score_list: list, 
+def set_patchmatch_cfg(workspace: str, reference_image: int, score_list: list, name_list: list,
                        view_ind : int, enable_view_selection: bool, use_geometry: bool):
     '''
         It keeps the top BEST_OF_N_VIEWS views to reconstruct scenes according
@@ -285,23 +298,22 @@ def set_patchmatch_cfg(workspace: str, reference_image: int, score_list: list,
             Enable geometric filtering.
         
     '''
-    path_to_images = os.path.join(workspace, 'images/*')
     path_to_config = os.path.join(workspace, 'stereo/patch-match.cfg')
     
     # obtain all image names (except for the reference image) and 
     # create a dictionary for images and corresponding valid scores
-    src_image = [ image.split('/')[-1] for image in sorted(glob.glob(path_to_images)) if "_{:d}_".format(reference_image+1) not in image ]
     
-    if enable_view_selection:
-        # load valid scores and remove the score of itself 
-        scores = [score[view_ind] for score in score_list]     
-        del scores[reference_image]
-        valid_scores = [score for score in scores if score is not None]
-    else:
-        valid_scores = [0]*len(src_image)       # set scores for images 
+    valid_scores = []
+    source_image = []
+    for names, scores in zip(name_list, score_list):
+        mask = [ True if'view{:d}'.format(view_ind) in name and "_{:d}_".format(reference_image+1) not in name 
+                else False 
+                for name in names ]
+        source_image = source_image + np.array(names)[mask].tolist()
+        valid_scores = valid_scores + np.array([score for score in scores if score is not None])[mask].tolist()
 
-    assert len(src_image) == len(valid_scores), "The number of valid images does not match the number of scores"
-    image_score_dict = dict(zip(src_image, valid_scores))
+    assert len(source_image) == len(valid_scores), "The number of valid images does not match the number of scores"
+    image_score_dict = dict(zip(source_image, valid_scores))
     
     # keep the top N views
     top_n_candidates = sorted(image_score_dict.items(), key=lambda item:item[1], reverse=True)[:BEST_OF_N_VIEWS]
@@ -406,10 +418,15 @@ def create_workspace_from_cam360_list( cam_list: list, refimage_index: int = -1,
         raise ValueError("Only 4 and 6 views are supported")    
     
     ref_cam = cam_list[refimage_index]   
-    score_cam = []
+    views_score = []
+    views_names = []
     
+    selected_view_index = np.zeros(number_of_views)
     camera_txt_flag = True # whether to writh camera model .txt
     for ind, src_cam in enumerate(cam_list):
+        # present the process
+        print('Decomposing the {:d} image'.format(ind))
+        
         # ckeck the textures
         if src_cam.texture is None:
             if ind == refimage_index:
@@ -421,18 +438,17 @@ def create_workspace_from_cam360_list( cam_list: list, refimage_index: int = -1,
             enable_view_selection = (ind!=refimage_index) and view_selection  # not run view selectino on the reference view itself
             
             # decompose omnidirectional image into 6 cubic maps and save them
-            scores, camera_txt_flag = decompose_and_save(src_cam, ref_cam, cubemap_resolution, work_dir, prefix="cam360", number_of_views=number_of_views,
-                                                             image_index = ind + 1, camera_txt_flag=camera_txt_flag, select_view=enable_view_selection)
-            score_cam.append(scores)
-                
-            # present the process
-            print('Decomposing the {:d} image'.format(ind))
+            scores, img_names, camera_txt_flag, num_selected_view = decompose_and_save(src_cam, ref_cam, cubemap_resolution, work_dir, prefix="cam360", 
+                                                                            number_of_views=number_of_views, image_index = ind+1, view_index = selected_view_index,
+                                                                            camera_txt_flag = camera_txt_flag, select_view = enable_view_selection)
+            views_score.append(scores)  
+            views_names.append(img_names)
             
-    return score_cam
+    return views_score, views_names
 
 
-def decompose_and_save(cam: Cam360, ref_cam: Cam360, resolution: tuple=None, work_dir: str="./workspace", number_of_views: int=6,
-                       prefix: str="cam360_cubemap",  image_index:int=0,  camera_txt_flag: bool=True, select_view: bool=False):
+def decompose_and_save(src_cam: Cam360, ref_cam: Cam360, resolution: tuple, work_dir: str, prefix: str,  image_index: int, 
+                       view_index: np.array, number_of_views: int=6, camera_txt_flag: bool=True, select_view: bool=False):
     """
         Given a cam360 objects, it decomposes the cam360 objs into 6 cubic maps
         and save them according to the view (back -> view0, front - view1 etc.).
@@ -441,7 +457,7 @@ def decompose_and_save(cam: Cam360, ref_cam: Cam360, resolution: tuple=None, wor
         
         Parameters
         ----------    
-        cam : cam360 objs
+        src_cam : cam360 objs
             A source cam360 objects;
             
         ref_cam : cam360 objs
@@ -457,9 +473,9 @@ def decompose_and_save(cam: Cam360, ref_cam: Cam360, resolution: tuple=None, wor
             whether to select views for dense reconstruction;
     """    
     if resolution is None:
-        resolution = (cam._height, cam._height)
+        resolution = (src_cam._height, src_cam._height)
     
-    if cam.texture is None:
+    if src_cam.texture is None:
         raise ValueError("The given camera360 object doesn't have texture")
     
     else:
@@ -472,61 +488,77 @@ def decompose_and_save(cam: Cam360, ref_cam: Cam360, resolution: tuple=None, wor
         except:
             raise ValueError("The reference camera360 doesn't have valid pose") 
         
-        cubemap_obj.sphere2cube(cam, resolution=resolution)
+        cubemap_obj._cubemap = [[]]*number_of_views
         
+        # align src and ref camera to reduce complexity
+        src2ref = src_cam.rotation_mtx.transpose().dot(reference_pose[0])
+        cam = src_cam.rotate(src2ref)
+                
         prefix = prefix + "_{:d}".format(image_index)
         score_list = []
+        name_list  = []
         for ind in range(number_of_views):
-                       
+            
+            initial_pose=VIEW_ANG[ind]
+            
             view_folder = os.path.join(work_dir, 'cubemaps/view' + str(ind))
             para_folder = os.path.join(work_dir, 'cubemaps/parameters/view' + str(ind))
             check_path_exist(view_folder)
-            check_path_exist(para_folder)
+            check_path_exist(para_folder)            
             
-            # compute initial pose for projection 
-            # Assumption: views looking to the same direction are more
-            #             likely to have enough overlaps
-            intial_z = cam.rotation_mtx.dot(reference_pose[0].transpose().dot( VIEW_ROT[ind].transpose() )).dot(np.array([0,0,1]))
-            intial_z = np.expand_dims(intial_z, axis=1)
-            initial_pose = np.abs(eu2pol(intial_z[0], intial_z[1], intial_z[2]))[:,0][:2]
-
+            # No matter view selection is enabled or not, regular cubic maps will be generated and saved
+            cubemap_obj.cubemap[ind] = cubemap_obj.cube_projection(cam = cam,
+                               direction  = np.flip(VIEW_ANG[ind]).tolist()+[np.pi/2, np.pi/2],  # since in cubeprojection, the angle is (phi, theta)
+                               resolution = resolution)
+            score = [1.5]
+            view_index[ind] += 1
+            image_name, camera_txt_flag = save_view_parameters(view_folder, para_folder, prefix, ind, int(view_index[ind]), camera_txt_flag, 
+                                                   cam, cubemap_obj, resolution, initial_pose, reference_pose )
+            name_list.append(image_name)
+            
+            # if view selection is enabled, better views will be selected and saved if it is possible
             if select_view:
-                # if enable view selection -- try to refine the initial pose
-                cubemap_obj.cubemap[ind], initial_pose, score = view_selection(cam, reference_cube[ind], 
-                                                                               initial_pose=(initial_pose[0], initial_pose[1]))
-            else:
-                score = 2
-
-            score_list.append(score)
-            
-    # TODO: check here    
-        
-            if (not select_view) or (score is not None):
-            # if no need to select view or the score of the selected view is not None
-                # save the view
-                image_path = cubemap_obj.save_cubemap(path = view_folder, prefix = prefix, index=[ind])   
-                image_name = image_path[0].split('/')[-1]
-            
-                # TODO: support images taken by different camera models
-                
-                # save parameters
-                camera_parameters = [resolution[0]/2, resolution[1]/2, resolution[0]/2, resolution[1]/2]
-                if camera_txt_flag or ( not os.path.exists(os.path.join(para_folder, 'cameras.txt')) ):
-                # if there is no parameter file or 
-                    camera_id = create_camera_model(path=para_folder, camera_para = [camera_parameters], camera_size=resolution)
-                    save_3d_points(para_folder)
+                cubemap_obj.cubemap[ind], initial_pose, score_vs = view_selection(cam, reference_cube[ind], initial_pose=VIEW_ANG[ind])
+                score.append(score_vs)
+                if score_vs is not None:
+                    view_index[ind] += 1
+                    score[0] = score[1] - 0.25   # for original view, the score for trianglation angle should be low, here use 0.25 as punishment
+                    image_name_vs, camera_txt_flag = save_view_parameters(view_folder, para_folder, prefix + '_selected', ind, int(view_index[ind]), camera_txt_flag, 
+                                                           cam, cubemap_obj, resolution, initial_pose, reference_pose )
+                    name_list.append(image_name_vs)
                     
-                    # only write once
-                    camera_txt_flag = False
-                else:
-                    camera_id = 1
-                
-                # save poses
-                source_pose = [cam.rotation_mtx, cam.translation_vec]
-                pose_colmap = convert_coordinate(source_pose, reference_pose, index_of_cubemap=ind, initial_pose = initial_pose)
-                save_pose(para_folder, pose_colmap, image_index, image_name, camera_id)  
+                    
+            score_list = score_list + score        
+    return score_list, name_list, camera_txt_flag, image_index
+
+
+def save_view_parameters(target_folder: str, para_folder: str, prefix: str, view_ind: int, image_index: int,  write_camera: bool, 
+                         cam: Cam360, cubemap_obj: CubicMaps, resolution: tuple , initial_pose: tuple, reference_pose: tuple):
+    
+    image_path = cubemap_obj.save_cubemap(path = target_folder, prefix = prefix, index=[view_ind])   
+    image_name = image_path[0].split('/')[-1]
+
+    # TODO: support images taken by different camera models
+    
+    # save parameters
+    camera_parameters = [resolution[0]/2, resolution[1]/2, resolution[0]/2, resolution[1]/2]
+    if write_camera or ( not os.path.exists(os.path.join(para_folder, 'cameras.txt')) ):
+    # if there is no parameter file or no need to write a file  
+        camera_id = create_camera_model(path=para_folder, camera_para = [camera_parameters], camera_size=resolution)
+        save_3d_points(para_folder)
         
-    return score_list, camera_txt_flag
+        # only write once
+        write_camera = False
+    else:
+        camera_id = 1
+    
+    # save poses
+    source_pose = [cam.rotation_mtx, cam.translation_vec]
+    pose_colmap = convert_coordinate(source_pose, reference_pose, index_of_cubemap=view_ind, initial_pose = initial_pose)
+    save_pose(para_folder, pose_colmap, image_index, image_name, camera_id)  
+    
+    return image_name, write_camera
+
 
 
 def convert_coordinate(source_pose: list, reference_pose: list, index_of_cubemap: int, initial_pose: tuple=None):
@@ -818,6 +850,9 @@ def organize_outputs(colmap_ws: str, dst_folder: str, target_map: str, is_geom: 
     all_maps_path = sorted(all_maps_path)
     
     for image in all_maps_path:  
+        if ('selected' in image): # all selected source views are not used for reconstruction
+            continue
+        
         image_name = image.split('/')[-1].split('.')[0][:-6]
         view_index = image.split('/')[-1].split('.')[0][-5:]
             
