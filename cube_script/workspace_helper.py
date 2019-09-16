@@ -6,10 +6,7 @@ Created on Fri Apr  19 18:39:57 2019
 @author: zhantao
 """
 import os
-import sys
 import glob
-import time
-import pickle
 import warnings
 import subprocess
 from shutil import rmtree
@@ -21,7 +18,6 @@ import numpy as np
 import matplotlib.pyplot as plt
 
 from cam360 import Cam360
-from spherelib import eu2pol
 from cubicmaps import CubicMaps
 from read_model import read_cameras_text
 from view_selection import view_selection
@@ -82,10 +78,12 @@ VIEW_ANG = np.array([[np.pi/2,    0   ],
 
 BEST_OF_N_VIEWS = 20
 
+BLENDER_INF = 100
+
 
 def dense_from_cam360list(cam360_list: list, workspace: str, patchmatch_path: str, 
                           reference_view: int, views_for_depth: int=4, use_view_selection: bool=False, 
-                          gpu_index: int=-1, geometric_depth: bool=False):
+                          gpu_index: int=-1, geometric_depth: bool=False, seed: float = None):
     """
         Given a list of cam360 objects, it calls 'estimate_dense_depth' to estimate 
         depth for all cam360 objects in the list.
@@ -121,6 +119,10 @@ def dense_from_cam360list(cam360_list: list, workspace: str, patchmatch_path: st
     if os.path.isdir(workspace):
         rmtree(workspace)
     
+    # set random seed
+    if seed is not None:
+        np.random.seed(seed)
+        
     cam360_list = estimate_dense_depth(cam360_list, 
                                        reference_image = reference_view,
                                        workspace = workspace,
@@ -985,7 +987,7 @@ def project_colmap_maps(path: str, view_name: str = None, views_list: list = [],
     return cubemap.omnimage
     
 
-def evaluate(estimation: np.array, GT: np.array, checking_line: int = 100, save: bool = False, max_: int = 25):   
+def evaluate(estimation: np.array, GT: np.array, checking_line: int = 100, max_: int = 25, error_threshold: int = 2, save: bool = False,):   
     '''
         It compares the two given images. 
         
@@ -1012,6 +1014,7 @@ def evaluate(estimation: np.array, GT: np.array, checking_line: int = 100, save:
             pixels are counted, including the sky and the ground.
         
     '''
+    GT[GT>BLENDER_INF] = BLENDER_INF
     
     plt.figure(figsize=[12,12])
     min_d_toshow = min(estimation.min(), GT.min())
@@ -1019,15 +1022,12 @@ def evaluate(estimation: np.array, GT: np.array, checking_line: int = 100, save:
 
     # initialize error map and mask 
     diff_map = abs(estimation - GT)
-    valid_mask   = estimation != estimation.min()  # count all pixels estimated
-    valid_mask_f = np.logical_and(valid_mask, diff_map<max_)   # filter out outliers to evaluate performance
+    valid_mask = np.logical_and( GT > 0, GT < BLENDER_INF)
     
     # calculate rmse from valid pixels
-    RMSE   = np.sqrt(np.sum(diff_map[valid_mask]**2)/valid_mask.sum())
-    f_RMSE = np.sqrt(np.sum(diff_map[valid_mask_f]**2)/valid_mask_f.sum())
-    print('The raw RMSE is:', RMSE )
-    print('The filtered RMSE is:', f_RMSE)
-
+    depth_score = np.sum(diff_map[valid_mask] > error_threshold)/valid_mask.sum() * 100
+    print("There are {:.2f}% data having an error larger than {:.2f}.".format(depth_score, error_threshold))
+    
     if not save:
         plt.subplot(421)
         plt.imshow(estimation, cmap = 'magma', vmin=min_d_toshow, vmax=max_d_toshow);
@@ -1087,7 +1087,7 @@ def evaluate(estimation: np.array, GT: np.array, checking_line: int = 100, save:
         
         # plot error histogram
         plt.subplot(428)
-        plt.hist(diff_map.flatten(), bins=int(max_), histtype="stepfilled", normed=True, alpha=0.6, range=(0, max_))
+        plt.hist(diff_map[valid_mask].flatten(), bins=50, histtype="stepfilled", density=True, alpha=0.6, range=(0, max_))
         plt.grid(ls='--')
         plt.xlabel('errors', fontsize=12)
         plt.ylabel('cumulative percentage', fontsize=12)
@@ -1155,11 +1155,9 @@ def evaluate(estimation: np.array, GT: np.array, checking_line: int = 100, save:
         
         # plot error histogram
         plt.figure(figsize=[8,4])
-        plt.hist(diff_map.flatten(), bins=int(max_), histtype="stepfilled", normed=True, alpha=0.6)
+        plt.hist(diff_map[valid_mask].flatten(), bins=50, histtype="stepfilled", density=True, alpha=0.6, range=(0, max_), cumulative=True)
         plt.grid(ls='--')
         plt.xlabel('errors', fontsize=18)
         plt.ylabel('cumulative percentage', fontsize=18)
         plt.title('histogram of errors', fontsize=18);
         plt.savefig('hitrogram_error.png', dpi=300, bbox_inches="tight")
-         
-    return RMSE

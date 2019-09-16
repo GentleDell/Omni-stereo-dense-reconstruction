@@ -929,7 +929,7 @@ class CubicMaps:
             
             
     def filt_depthoutliers(self, depth_map: np.array) -> np.array:
-        min_depth, max_depth = np.percentile(depth_map, [10, 90])
+        min_depth, max_depth = np.percentile(depth_map, [5, 95])
         depth_map[depth_map < min_depth] = min_depth
         depth_map[depth_map > max_depth] = max_depth
         return depth_map
