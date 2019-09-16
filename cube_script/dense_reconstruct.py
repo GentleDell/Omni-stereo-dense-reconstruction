@@ -92,11 +92,11 @@ def main():
     cam360_list = dense_from_cam360list(cam360_list, 
                                         workspace = args.workspace,
                                         patchmatch_path = args.patchmatch_path, 
-                                        reference_view  = args.reference_view,
+                                        reference_image  = args.reference_view,
                                         views_for_depth = args.views_for_depth,
                                         use_view_selection = args.view_selection,
                                         gpu_index = args.gpu_index,
-                                        geometric_depth = args.geometric_depth)
+                                        use_geometry = args.geometric_depth)
     
     # save data for view synthesis
     pickle_out = open(os.path.join(args.workspace,"cam360.pickle"),"wb")

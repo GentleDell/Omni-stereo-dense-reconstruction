@@ -34,7 +34,7 @@ Examples can be found [here](https://github.com/GentleDell/Omni-stereo-dense-rec
 
 ## File Formats
 
-Each workspaec folder is orgnized as follow:
+If the 'debug_mod' is set to True, some intermediate files will be saved to the workspace folder, including cubic views, omni depth, omni cost and patch matching stereo workspace. The workspaec folder is orgnized as follow:
 ```
 workspace                   # can be set by "--workspace=/path/to/workspace"
 │

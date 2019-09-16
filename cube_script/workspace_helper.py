@@ -81,62 +81,9 @@ BEST_OF_N_VIEWS = 20
 BLENDER_INF = 100
 
 
-def dense_from_cam360list(cam360_list: list, workspace: str, patchmatch_path: str, 
-                          reference_view: int, views_for_depth: int=4, use_view_selection: bool=False, 
-                          gpu_index: int=-1, geometric_depth: bool=False, seed: float = None):
-    """
-        Given a list of cam360 objects, it calls 'estimate_dense_depth' to estimate 
-        depth for all cam360 objects in the list.
-        
-        Parameters
-        ----------    
-        cam360_list : list of cam360 objs
-            A list containing cam360 objects;
-            
-        workspace : str
-            Where to save the whole work space;
-            
-        patchmatch_path: str
-            Where to find the executable patch matching stereo GPU file. 
-            
-        reference_view: int
-            The index of the reference view. Only works when view selection is disabled;
-            
-        views_for_depth: int
-            The number of views (4 or 6) to synthesis the omnidirectional depthmap. 
-            4 means the sky and ground will be neglected.      
-        
-        use_view_selection: bool
-            Enable view selection.
-            
-        gpu_index: int
-            The index of GPU to run the Patch Matching.
-            
-        geometric_depth: bool
-            Enable geometric filtering.
-    """
-    # clean existing workspace
-    if os.path.isdir(workspace):
-        rmtree(workspace)
-    
-    # set random seed
-    if seed is not None:
-        np.random.seed(seed)
-        
-    cam360_list = estimate_dense_depth(cam360_list, 
-                                       reference_image = reference_view,
-                                       workspace = workspace,
-                                       patchmatch_path = patchmatch_path, 
-                                       views_for_depth = views_for_depth,
-                                       use_view_selection = use_view_selection,
-                                       gpu_index = gpu_index,
-                                       use_geometry = geometric_depth)    
-    return cam360_list
-
-
-def estimate_dense_depth(cam360_list: list, reference_image: int, workspace: str, 
-                         patchmatch_path: str, views_for_depth: int=4, use_view_selection: bool=False, 
-                         gpu_index: int=-1, use_geometry: bool=False):
+def dense_from_cam360list(cam360_list: list, reference_image: int, workspace: str, 
+                          patchmatch_path: str, views_for_depth: int=4, use_view_selection: bool=False, 
+                          gpu_index: int=-1, use_geometric_filter: bool=False, seed: float = None, debug_mod: bool=False):
     """
         Given a list of cam360 objects, it estimates depthmap for the reference image.
     
@@ -183,12 +130,23 @@ def estimate_dense_depth(cam360_list: list, reference_image: int, workspace: str
         
         Examples
         --------
-        >>> estimate_dense_depth(cam360_list = [cam360_1, cam360_2, cam360_3], 
-                                  workspace = './workspace',
-                                  reference_image = 4,  
-                                  patchmatch_path = './colmap', 
-                                  views_for_depth = 4)
+        >>>> cam360_list = dense_from_cam360list(cam360_list, 
+                        workspace = args.workspace,
+                        patchmatch_path = args.patchmatch_path, 
+                        reference_image  = args.reference_view,
+                        views_for_depth = args.views_for_depth,
+                        use_view_selection = args.view_selection,
+                        gpu_index = args.gpu_index,
+                        use_geometry = args.geometric_depth)
     """
+    # clean existing workspace
+    if os.path.isdir(workspace):
+        rmtree(workspace)
+    
+    # set random seed
+    if seed is not None:
+        np.random.seed(seed)
+    
     # create a workspace for patch matching stereo GPU
     scores_list, name_list = create_workspace_from_cam360_list(cam_list=cam360_list, refimage_index=reference_image, number_of_views = views_for_depth,
                                                     work_dir = workspace, view_selection=use_view_selection)
@@ -214,7 +172,7 @@ def estimate_dense_depth(cam360_list: list, reference_image: int, workspace: str
         CM.wait()
         
         # modify the patch-match.cfg file to specify the images to be used
-        set_patchmatch_cfg(output_path, reference_image, scores_list, name_list, view, use_view_selection, use_geometry)
+        set_patchmatch_cfg(output_path, reference_image, scores_list, name_list, view, use_view_selection, use_geometric_filter)
         
         # start patch matching stereo
         command = patchmatch_path + \
@@ -223,7 +181,7 @@ def estimate_dense_depth(cam360_list: list, reference_image: int, workspace: str
                   " --PatchMatchStereo.depth_min=0"  + \
                   " --PatchMatchStereo.depth_max=500" + \
                   " --PatchMatchStereo.gpu_index={:d}".format(gpu_index) 
-        if use_geometry:
+        if use_geometric_filter:
             command = command + " --PatchMatchStereo.geom_consistency true"     # use geometry filtering
         else:
             command = command + " --PatchMatchStereo.geom_consistency false"    # only compute the photometric depth
@@ -234,7 +192,7 @@ def estimate_dense_depth(cam360_list: list, reference_image: int, workspace: str
 
     # collect cubemaps belonging to same omnidirectional images
     print("\n\nReorganizing workspace ...")
-    organize_workspace(workspace=workspace, is_geometric=use_geometry)
+    organize_workspace(workspace=workspace, is_geometric=use_geometric_filter)
 
     # project cubic depth to omnidirectional depthmap
     print("\n\nReprojecting cubic depth to 360 depth ...")
@@ -243,7 +201,7 @@ def estimate_dense_depth(cam360_list: list, reference_image: int, workspace: str
                                        view_to_syn = views_for_depth, 
                                        maps_type   = 'depth_maps',
                                        resolution  = resolution,
-                                       enable_geom = use_geometry)
+                                       enable_geom = use_geometric_filter)
     
     # project cost maps
     print("\n\nReprojecting cost maps ...")
@@ -251,12 +209,13 @@ def estimate_dense_depth(cam360_list: list, reference_image: int, workspace: str
                                       view_to_syn = views_for_depth, 
                                       maps_type   = 'cost_maps',
                                       resolution  = resolution,
-                                      enable_geom = use_geometry)
+                                      enable_geom = use_geometric_filter)
 
     world2ref = cam360_list[reference_image].rotation_mtx
-    if use_geometry:
+    if use_geometric_filter:
         # save all views at a time        
         for ind, cam in enumerate(cam360_list):
+            # rotate depth maps for the corresponding source view
             depth = Cam360(rotation_mtx = np.eye(3), translation_vec=np.array([0,0,0]), 
                    height = depth_list[ind].shape[0], width = depth_list[ind].shape[1], channels = depth_list[ind].shape[2], 
                    texture= depth_list[ind][:,:,0]/255)
@@ -270,8 +229,13 @@ def estimate_dense_depth(cam360_list: list, reference_image: int, workspace: str
     else:        
         cam360_list[reference_image].depth = depth_list[0][:,:,0]
         cam360_list[reference_image].cost  = cost_list [0][:,:,0]
-        
+    
+    # if intermediate results are not required (not in debug mode), remove them all 
+    if not debug_mod:
+        rmtree(workspace)
+    
     return cam360_list
+
 
 def set_patchmatch_cfg(workspace: str, reference_image: int, score_list: list, name_list: list,
                        view_ind : int, enable_view_selection: bool, use_geometry: bool):
@@ -1026,7 +990,7 @@ def evaluate(estimation: np.array, GT: np.array, checking_line: int = 100, max_:
     
     # calculate rmse from valid pixels
     depth_score = np.sum(diff_map[valid_mask] > error_threshold)/valid_mask.sum() * 100
-    print("There are {:.2f}% data having an error larger than {:.2f}.".format(depth_score, error_threshold))
+    print("There are {:.2f}% pixels having an error larger than {:.2f}.".format(depth_score, error_threshold))
     
     if not save:
         plt.subplot(421)
@@ -1087,7 +1051,7 @@ def evaluate(estimation: np.array, GT: np.array, checking_line: int = 100, max_:
         
         # plot error histogram
         plt.subplot(428)
-        plt.hist(diff_map[valid_mask].flatten(), bins=50, histtype="stepfilled", density=True, alpha=0.6, range=(0, max_))
+        plt.hist(diff_map[valid_mask].flatten(), bins=50, histtype="stepfilled", density=True, alpha=0.6, range=(0, max_),cumulative=True)
         plt.grid(ls='--')
         plt.xlabel('errors', fontsize=12)
         plt.ylabel('cumulative percentage', fontsize=12)
