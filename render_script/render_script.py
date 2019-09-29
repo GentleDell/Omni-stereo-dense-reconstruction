@@ -85,9 +85,10 @@ if (gpu_ind is not None) and (num_all_gpu is not None):
         bpy.context.user_preferences.addons['cycles'].preferences.compute_device_type = 'CUDA'
     except:
         raise ValueError('Can not find valid CUDA version')
-        
-    for i in range(num_all_gpu+1):
-        bpy.context.user_preferences.addons['cycles'].preferences.devices[i].use = gpu_ind == i
+    
+    if gpu_ind != 0:
+        for i in range(num_all_gpu+1):
+            bpy.context.user_preferences.addons['cycles'].preferences.devices[i].use = gpu_ind == i
 
 
 # Create a new camera.

@@ -3,7 +3,7 @@ Given a blender file "file_name.blender", this script permits to place a 360 deg
 To launch the rendering: <br>
 1. Edit the render.cfg file (next to this scrip). If there is no render.cfg then create one and put it in the folder containing this script. In render.cfg, You can set the pose of the 360 camera, resolution of output image and in which GPU you want to render the image. An example is provided below:
     
-   \# There are 4 gpus in total and we want to use gpu0 to render the  <br>
+   \# There are 4 gpus in total and we want to use all GPUs to render the  <br>
    \# scene. The camera is placed at (X=10, Y=30, Z=1) and rotated by  <br>
    \# 90 degree around the X-axis. Resolution is (1024,512) <br>
    all_gpu 4 <br>

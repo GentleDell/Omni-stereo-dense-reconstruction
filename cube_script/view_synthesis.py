@@ -477,8 +477,8 @@ def project_to_view(cam360_list: list, rotation: np.array, translation: np.array
         # the index of the view from which these pixels come
         view_ind  = ind*np.ones((cam._height * cam._width))
         
-        projections = np.append(projections, np.stack((np.clip( np.round(theta_pix), 0, 511) ,  
-                                                       np.clip( np.round(phi_pix),  0, 1023) , 
+        projections = np.append(projections, np.stack((np.clip( np.floor(theta_pix), 0, 511) ,  
+                                                       np.clip( np.floor(phi_pix),  0, 1023) , 
                                                        depth_new, 
                                                        basic_cost,
                                                        pixel_ind,
@@ -687,7 +687,7 @@ def project(theta: np.array, phi: np.array, depth: np.array,
 
     # Compute the projection on the sphere B in 3D coordinates.
     a_f = a.dot(f)                               # spherical point clond under the rotation of b
-    num = (a_f * depth) - b[:, None]             # 3D point cloud under coordinate b (was a bug which was '+ b[:, None]')
+    num = (a_f * depth) + b[:, None]
 
     # Compute the projection on the sphere B in polar coordinate.
     theta_proj, phi_proj, depth_proj = splib.eu2pol(num[0, :], num[1, :], num[2, :])

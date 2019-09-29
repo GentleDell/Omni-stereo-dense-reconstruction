@@ -78,8 +78,6 @@ VIEW_ANG = np.array([[np.pi/2,    0   ],
 
 BEST_OF_N_VIEWS = 20
 
-BLENDER_INF = 100
-
 
 def dense_from_cam360list(cam360_list: list, reference_image: int, workspace: str, 
                           patchmatch_path: str, views_for_depth: int=4, use_view_selection: bool=False, 
@@ -951,7 +949,7 @@ def project_colmap_maps(path: str, view_name: str = None, views_list: list = [],
     return cubemap.omnimage
     
 
-def evaluate(estimation: np.array, GT: np.array, checking_line: int = 100, max_: int = 25, error_threshold: int = 2, save: bool = False,):   
+def evaluate(estimation: np.array, GT: np.array, checking_line: int = 100, max_: int = 25, error_threshold: int = 2, inf_value: int=100, save: bool = False,):   
     '''
         It compares the two given images. 
         
@@ -978,7 +976,7 @@ def evaluate(estimation: np.array, GT: np.array, checking_line: int = 100, max_:
             pixels are counted, including the sky and the ground.
         
     '''
-    GT[GT>BLENDER_INF] = BLENDER_INF
+    GT[GT>inf_value] = inf_value
     
     plt.figure(figsize=[12,12])
     min_d_toshow = min(estimation.min(), GT.min())
@@ -986,7 +984,7 @@ def evaluate(estimation: np.array, GT: np.array, checking_line: int = 100, max_:
 
     # initialize error map and mask 
     diff_map = abs(estimation - GT)
-    valid_mask = np.logical_and( GT > 0, GT < BLENDER_INF)
+    valid_mask = np.logical_and( GT > 0, GT < inf_value)
     
     # calculate rmse from valid pixels
     depth_score = np.sum(diff_map[valid_mask] > error_threshold)/valid_mask.sum() * 100

@@ -39,6 +39,10 @@ class Cam360:
     # Depth value range.
     DEPTH_MIN = 1e-4
     DEPTH_MAX = 100
+    
+    # Cost value range
+    COST_MIN = 1e-4
+    COST_MAX = 5
 
     # This class uses Cubic Splines for texture or depth interpolation.
     _SPLINE_ORDER = 3
@@ -364,6 +368,77 @@ class Cam360:
             depth = np.clip(depth, Cam360.DEPTH_MIN, Cam360.DEPTH_MAX)
 
             return depth
+    
+    
+    def get_cost_at(self, theta: np.array, phi: np.array) -> Optional[np.array]:
+        """
+        It returns the cost value at the coordinate (theta, phi).
+        The returned cost value is obtained via interpolation of self._cost.
+
+        Args:
+            theta: the elevation coordinate (N,).
+            phi: the azimuth coordinate (N,).
+
+        Returns:
+            the cost (N,) at the specified coordinates or None if self._cost is not available.
+        """
+
+        if self._cost is None:
+
+            return None
+
+        else:
+
+            # Create a (spline-based) continuous version of the camera cost map self._cost.
+            # It will be useful to evaluate the texture at off-grid coordinates.
+
+            # Differently from the camera texture, this construction is carried out at each call of this function,
+            # as the function is expected to be called rarely.
+
+            # The cost map needs to be padded in order to get rid of the border effects during interpolation.
+            padding = Cam360._SPLINE_ORDER + 1
+
+            # Pad the top and bottom parts of the camera cost map by repeating the first and last rows, respectively.
+            cost_wrapped = np.concatenate(
+                (np.tile(self._cost[0, :], (padding, 1)),
+                 self._cost,
+                 np.tile(self._cost[-1, :], (padding, 1))), axis=0)
+
+            # Pad the left and right sides of the camera cost map in a circular fashion.
+            cost_wrapped = np.concatenate(
+                (cost_wrapped[:, (-padding):],
+                 cost_wrapped,
+                 cost_wrapped[:, 0:padding]), axis=1)
+
+            # Compute the first and last value of the extended theta axis.
+            # The axis is referred to as 'extended' as it takes the vertical padding into account.
+            extended_theta_axis_first_value = (self._delta_theta / 2) - (self._delta_theta * padding)
+            extended_theta_axis_last_value = np.pi - (self._delta_theta / 2) + (self._delta_theta * padding)
+
+            # Compute the first and last value of the extended phi axis.
+            # The axis is referred to as 'extended' as it takes the horizontal padding into account.
+            extended_phi_axis_first_value = (self._delta_phi / 2) - (self._delta_phi * padding)
+            extended_phi_axis_last_value = (2 * np.pi) - (self._delta_phi / 2) + (self._delta_phi * padding)
+
+            # Compute the lengths of the extended theta and phi axes.
+            extended_theta_axis_length = cost_wrapped.shape[0]
+            extended_phi_axis_length = cost_wrapped.shape[1]
+
+            # Create a spline approximation of the camera texture.
+            low = [extended_theta_axis_first_value, extended_phi_axis_first_value]
+            up = [extended_theta_axis_last_value, extended_phi_axis_last_value]
+            orders = [extended_theta_axis_length, extended_phi_axis_length]
+            cost_spline = CubicSplines(low, up, orders, np.expand_dims(cost_wrapped.ravel(), axis=1))
+
+            # Evaluate the cost map spline approximation at the input (theta, phi) coordinates.
+            points = np.column_stack((theta, phi))
+            cost = cost_spline.interpolate(points, diff=False)
+            cost = np.squeeze(cost)
+
+            # Clip the cost in the case of values outside the allowed range.
+            cost = np.clip(cost, Cam360.COST_MIN, Cam360.COST_MAX)
+
+            return cost
 
     def rotate(self,
                rot_mtx: Optional[np.array] = None,
@@ -424,6 +499,15 @@ class Cam360:
 
             # Reshape the depth map of the rotated camera.
             depth_new = np.reshape(depth_new, (self._height, self._width))
+            
+        cost_new = None
+        if self._cost is not None:
+
+            # Compute the cost map of the rotated camera.
+            cost_new = self.get_cost_at(theta_new, phi_new)
+
+            # Reshape the depth map of the rotated camera.
+            cost_new = np.reshape(cost_new, (self._height, self._width))
 
         # Compute the rotation matrix and translation vector of the rotated camera.
         rotation_mtx_new = rot_mtx.dot(self._rotation_mtx)
@@ -431,7 +515,7 @@ class Cam360:
 
         cam_new = Cam360(rotation_mtx_new, translation_vec_new,
                          self._height, self._width, self._channels,
-                         texture_new, depth_new)
+                         texture_new, depth_new, cost=cost_new)
 
         return cam_new
 
