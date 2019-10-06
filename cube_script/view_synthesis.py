@@ -476,18 +476,44 @@ def project_to_view(cam360_list: list, rotation: np.array, translation: np.array
         
         # the index of the view from which these pixels come
         view_ind  = ind*np.ones((cam._height * cam._width))
-        
-        projections = np.append(projections, np.stack((np.clip( np.floor(theta_pix), 0, 511) ,  
-                                                       np.clip( np.floor(phi_pix),  0, 1023) , 
-                                                       depth_new, 
-                                                       basic_cost,
-                                                       pixel_ind,
-                                                       view_ind), axis = 1), axis = 0)
+    
         # all views are concatenated into a matrix of (res[0], num_view*res[1], 6) 
         # where [:,:,:2] is the index of row and column of corresponding pixel in 
         # synthesis view; [:,:,2] is depth; [:,:,3] is cost; [:,:,4] is the index
         # in the raveled source view, [:,:,5] is the index of view from which these
         # pixels come.
+        projected_depth = np.stack((np.clip( np.round(theta_pix), 0, resolution[0]-1) ,  
+                                    np.clip( np.round(phi_pix)  , 0, resolution[1]-1) , 
+                                    depth_new, 
+                                    basic_cost,
+                                    pixel_ind,
+                                    view_ind), axis = 1)
+        
+        # expand the depth value of pxiel to a 3 by 3 cross, so that more holes
+        # and invalid values can be removed.
+        #                _
+        #    _         _|_|_ 
+        #   |_|  ==>  |_|_|_|  
+        #               |_|
+        #
+        top, bottom, left, right = ( np.zeros(projected_depth.shape),np.zeros(projected_depth.shape), 
+                                     np.zeros(projected_depth.shape), np.zeros(projected_depth.shape) )
+        
+        # do not touch the boundary
+        top    [ projected_depth[:,0] > 0, 0] = -1
+        bottom [ projected_depth[:,0] < resolution[0] - 1, 0 ] = 1
+        
+        left   [ projected_depth[:,1] > 0, 1] = -1
+        right  [ projected_depth[:,1] < resolution[1] - 1, 1] = 1
+        
+        projected_depth = np.vstack( (projected_depth, 
+                                      projected_depth+top,
+                                      projected_depth+left,
+                                      projected_depth+right,
+                                      projected_depth+bottom))
+        
+        # append the expanded and projected depth maps to projections matrix
+        projections = np.append(projections, projected_depth, axis = 0)        
     
     return projections 
 
