@@ -10,6 +10,7 @@ import warnings
 import numpy as np
 
 from cam360 import Cam360
+from spherelib import pol2eu, eu2pol
 from cubicmaps import CubicMaps
 import matplotlib.pyplot as plt
 
@@ -18,10 +19,10 @@ MIN_NUM_FEATURE = 20
 MIN_OVERLAPPING = 40
 MIN_TRIANGULATION = 6*np.pi/180
 
-UPDATE_RATE = 1.0
+UPDATE_RATE = 0.1
     
 
-def view_selection(cam:Cam360, reference:np.array, initial_pose: tuple, fov: tuple=(np.pi/2, np.pi/2),
+def view_selection(cam:Cam360, reference:np.array, initial_pose: tuple, reference_trans: np.array, fov: tuple=(np.pi/2, np.pi/2),
                    max_iter: int=10, use_filter: bool=True, threshold: float=10.0):
     '''
         It selects a view together with its score that satisfies two criterions:
@@ -48,6 +49,9 @@ def view_selection(cam:Cam360, reference:np.array, initial_pose: tuple, fov: tup
             
         reference : np.array
             The reference image.
+            
+        reference_pose : np.array
+            Pose of the reference view
             
         initial_pose : tuple
             The first pose to start the search. (theta, phi)
@@ -82,103 +86,127 @@ def view_selection(cam:Cam360, reference:np.array, initial_pose: tuple, fov: tup
         >>> img, pose = view_selection(cam360, ref_view, 
                                        initial_pose=(np.pi/2, np.pi*3/2))
     '''
-    # initialize objs to be used
-    orb = cv2.ORB_create()
-    cubemaps = CubicMaps()
+    # if reference view and src view is colinear, skip them;
+    # theta_ref == theta_src, phi_ref == phi_src or the other side.
+    delta_trans = reference_trans - cam.translation_vec
+    trans_ref2src = eu2pol(np.array([delta_trans[0]]), np.array([delta_trans[1]]), np.array([delta_trans[2]])) 
+    if (abs(trans_ref2src[0] - initial_pose[0]) < 1e-8 and abs(trans_ref2src[1] - initial_pose[1]) < 1e-8) \
+    or (abs( np.pi - trans_ref2src[0] - initial_pose[0] ) < 1e-8 and abs( np.mod(trans_ref2src[1] - np.pi, 2*np.pi) - initial_pose[1]) < 1e-8):    
+        
+        cubemaps = CubicMaps()
+        
+        pose     = (initial_pose[1], initial_pose[0])
+        source   = cubemaps.cube_projection(cam=cam, direction=(pose + fov), resolution=reference.shape)
+        score    = 2
+        pose     = initial_pose
     
-    # color image to grayscale image
-    if reference.max() <= 1:
-        reference = np.round(reference*255)
-    reference = cv2.cvtColor(reference.astype('uint8'), cv2.COLOR_RGB2GRAY)
-    
-    # ATTENTION, here the pose is filipped. [becomes (phi, theta)]
-    initial_pose = (initial_pose[1], initial_pose[0])
-    
-#    unit_x = 1/reference.shape[1]
-#    unit_y = 1/reference.shape[0]
-    
-    pose = initial_pose
-    phi, theta = pose[0], pose[1]
-    for cnt in range(max_iter):
-        
-        # obtain a source view
-        source = cubemaps.cube_projection(cam=cam, direction=(pose + fov), resolution=reference.shape)
-        source_gray = cv2.cvtColor( np.round(source*255).astype('uint8'), cv2.COLOR_RGB2GRAY )
-       
-        ##################################
-#        DEMO AND DEBUG
-#        plt.imshow(source)
-#        plt.axis('off')
-#        plt.savefig("view_{:d}.png".format(cnt), bbox_inches='tight')
-#     cubemaps.cube_projection(cam=cam, direction=((3.8,1.57) + fov), resolution=reference.shape)
-        ##################################
-        
-        # feature detection and matching
-        kp1, des1 = orb.detectAndCompute(reference, None)
-        kp2, des2 = orb.detectAndCompute(source_gray, None)
-        
-#       draw_keypoints(reference, kp1)
-#       draw_keypoints(source_gray, kp2)
-    
-        bf = cv2.BFMatcher(cv2.NORM_HAMMING, crossCheck=True)
-        matches = bf.match(des1, des2)
-        matches = sorted(matches, key = lambda x:x.distance)
-        
-        # filtering outliers 
-        if use_filter:
-            matches = filter_matches(kp1, kp2, matches)
-        if len(matches) <= MIN_NUM_FEATURE:                 # Can not find enough inlier matches; start random searching
-            theta, phi = None, None
-            pose = (np.random.normal(loc=initial_pose[0], scale=1.0),
-                    np.random.normal(loc=initial_pose[1], scale=0.5))
-            pose = correct_angles(pose)
-            continue
-        
-        ####################            
-#        DEMO AND DEBUG
-#        show_matches = cv2.drawMatches(reference, kp1, source_gray, kp2, matches[:20], None, flags=2)
-#        plt.imshow(show_matches)
-#        plt.axis('off')
-#        plt.savefig("matches_iter{:d}.png".format(cnt), bbox_inches='tight')
-        ####################
-        
-        # calculate the centroids
-        centroids = feature_centroid(kp1, kp2, matches, source_gray.shape)
-                
-        if np.sqrt(np.sum((centroids[0] - centroids[1])**2)) <= threshold:
-            break
-        else:
-            # calculate changes of angle
-            ref_phi, ref_theta = cubemaps.cartesian2spherical(
-                    phi=pose[0], theta=pose[1], 
-                    width_grids = np.array([centroids[0][0], centroids[0][0]])/reference.shape[0],
-                    height_grids= np.array([centroids[0][1], centroids[0][1]])/reference.shape[1]
-                    )
-            src_phi, src_theta = cubemaps.cartesian2spherical(
-                    phi=pose[0], theta=pose[1], 
-                    width_grids = np.array([centroids[1][0], centroids[1][0]])/reference.shape[0],
-                    height_grids= np.array([centroids[1][1], centroids[1][1]])/reference.shape[1]
-                    )
-            delta_phi, delta_theta = ref_phi[0]-src_phi[0], ref_theta[0]-src_theta[0]
-            
-            # update poses
-            phi = pose[0] - UPDATE_RATE*delta_phi
-            theta = pose[1] - UPDATE_RATE*delta_theta
-            
-            phi,theta = correct_angles((phi, theta))
-            pose = (np.asscalar(phi), np.asscalar(theta))
-            
-    # calculate the score of the selected view
-    angle = convert_angle(theta, phi, initial_pose)
-    if angle is not None:
-        score_overlapping = 1 - ((min(len(matches), MIN_OVERLAPPING) - MIN_OVERLAPPING)**2)/(MIN_OVERLAPPING**2)
-        score_triangulation = 1 - ((min(angle, MIN_TRIANGULATION) - MIN_TRIANGULATION)**2)/(MIN_TRIANGULATION**2)
-        score = score_overlapping + score_triangulation
-        
-        pose = (pose[1], pose[0]) # convert to (theta, phi)
     else:
-        # Fail to find valid views
-        source, pose, score = None, None, None
+    
+        # initialize objs to be used
+        sift = cv2.xfeatures2d.SIFT_create()
+        cubemaps = CubicMaps()
+        
+        # color image to grayscale image
+        if reference.max() <= 1:
+            reference = np.round(reference*255) 
+        reference = cv2.cvtColor(reference.astype('uint8'), cv2.COLOR_RGB2GRAY)
+        
+        # ATTENTION, here the pose is filipped. [becomes (phi, theta)]
+        initial_pose = (initial_pose[1], initial_pose[0])
+        
+        # image center
+        # in opencv, row is y col is x while in numpy row is x col is y
+        # so here we flip the two dimensions
+        image_center = [reference.shape[1]/2, reference.shape[0]/2]
+        
+        pose = initial_pose
+        centroids  = [image_center, image_center]
+        for cnt in range(max_iter):
+            
+        # Firstly, update theta and phi
+            if centroids is not None:
+                # calculate changes of angle
+                ref_phi, ref_theta = cubemaps.cartesian2spherical(
+                        phi=pose[0], theta=pose[1], 
+                        width_grids  = np.array([centroids[0][0] - image_center[0]])/(image_center[0]),
+                        height_grids = np.array([centroids[0][1] - image_center[1]])/(image_center[1])
+                        )
+                src_phi, src_theta = cubemaps.cartesian2spherical(
+                        phi=pose[0], theta=pose[1], 
+                        width_grids  = np.array([centroids[1][0] - image_center[0]])/(image_center[0]),
+                        height_grids = np.array([centroids[1][1] - image_center[1]])/(image_center[1])
+                        )
+                delta_phi, delta_theta = ref_phi[0]-src_phi[0], ref_theta[0]-src_theta[0]
+                
+                # update poses
+                phi = pose[0] - UPDATE_RATE*delta_phi
+                theta = pose[1] - UPDATE_RATE*delta_theta
+                
+                phi,theta = correct_angles((phi, theta))
+                pose = (np.asscalar(phi), np.asscalar(theta))
+            else:
+                pose = (np.random.normal(loc=initial_pose[0], scale=0.5),
+                        np.random.normal(loc=initial_pose[1], scale=0.25))
+                pose = correct_angles(pose)
+            
+        # Obtain a source view
+            source = cubemaps.cube_projection(cam=cam, direction=(pose + fov), resolution=reference.shape)
+            source_gray = cv2.cvtColor( np.round(source*255).astype('uint8'), cv2.COLOR_RGB2GRAY )
+           
+            ##################################
+    #        DEMO AND DEBUG
+    #        plt.imshow(source)
+    #        plt.axis('off')
+    #        plt.savefig("view_{:d}.png".format(cnt), bbox_inches='tight')
+    #        cubemaps.cube_projection(cam=cam, direction=((3.8,1.57) + fov), resolution=reference.shape)
+            ##################################
+            
+        # feature detection and matching
+            kp1, des1 = sift.detectAndCompute(reference, None)
+            kp2, des2 = sift.detectAndCompute(source_gray, None)
+    
+            bf = cv2.BFMatcher(cv2.NORM_L2, crossCheck=True)
+            matches = bf.match(des1, des2)
+            matches = sorted(matches, key = lambda x:x.distance)
+            
+            # filtering outliers 
+            if use_filter:
+                matches = filter_matches(kp1, kp2, matches)
+                
+            # Can not find enough inlier matches or the selected view looks
+            # toward the wrong direction; start random searching
+            if len(matches) <= MIN_NUM_FEATURE:
+                centroids = None
+                continue
+            
+            ####################            
+    #        DEMO AND DEBUG
+#            show_matches = cv2.drawMatches(reference, kp1, source_gray, kp2, matches, None, flags=2)
+#            plt.figure(figsize=(18,14))
+#            plt.imshow(show_matches)
+#            plt.axis('off')
+#            plt.savefig("matches_iter{:d}.png".format(cnt), bbox_inches='tight')
+#            plt.close()
+#            print("theta: {:f},  phi: {:f}".format(pose[1], pose[0]))
+             ####################
+            
+            # calculate the centroids
+            centroids = feature_centroid(kp1, kp2, matches, source_gray.shape)
+                    
+            if np.sqrt(np.sum((centroids[0] - centroids[1])**2)) <= threshold:      
+                break
+                
+        if centroids is not None:
+            # calculate the score of the selected view
+            angle = convert_angle(pose[1], pose[0], initial_pose)
+            score_overlapping = 1 - ((min(len(matches), MIN_OVERLAPPING) - MIN_OVERLAPPING)**2)/(MIN_OVERLAPPING**2)
+            score_triangulation = 1 - ((min(angle, MIN_TRIANGULATION) - MIN_TRIANGULATION)**2)/(MIN_TRIANGULATION**2)
+            score = score_overlapping + score_triangulation
+            
+            pose = (pose[1], pose[0])    # convert to (theta, phi)
+        else:
+            # Fail to find valid views
+            source, pose, score = None, None, None
     
     return source, pose, score
 
@@ -219,8 +247,8 @@ def feature_centroid(kp1, kp2, matches, image_size):
         For each group of keypoints, it calculates a weighted centroid and then it computes
         the distance between the two weighted centroids.
     '''
-    # reference image center
-    center = (image_size[0]/2, image_size[1]/2)
+    # reference image center (row -> y in opencv, col -> x in opencv)
+    center = (image_size[1]/2, image_size[0]/2)
     
     # positions of keypoints
     ref_features = np.array([kp1[m.queryIdx].pt for m in matches])  # features on the reference image

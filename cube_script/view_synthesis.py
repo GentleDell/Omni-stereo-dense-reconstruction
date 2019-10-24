@@ -31,6 +31,8 @@ _NUM_CANDIDATES_  = 10
 # cost function, affect the consistency of synthesized view
 _COST_DEFINITION_ = 0   # 0: 'Gaussian';
                         # 1: 'Nearest' ;
+# small number
+EPS = 1e-8
 
 
 def synthesize_view(cam360_list: list, rotation: np.array, translation: np.array, 
@@ -482,12 +484,18 @@ def project_to_view(cam360_list: list, rotation: np.array, translation: np.array
         # synthesis view; [:,:,2] is depth; [:,:,3] is cost; [:,:,4] is the index
         # in the raveled source view, [:,:,5] is the index of view from which these
         # pixels come.
-        projected_depth = np.stack((np.clip( np.round(theta_pix), 0, resolution[0]-1) ,  
-                                    np.clip( np.round(phi_pix)  , 0, resolution[1]-1) , 
+        projected_depth = np.stack((np.clip( np.floor(theta_pix), 0, resolution[0]-1) ,  
+                                    np.clip( np.floor(phi_pix)  , 0, resolution[1]-1) , 
                                     depth_new, 
                                     basic_cost,
                                     pixel_ind,
                                     view_ind), axis = 1)
+        
+        # remove invalid depth, which is -1; 
+        # then use percentile to remove outliers;
+        projected_depth = projected_depth[ projected_depth[:, 2] != -1, : ]
+        minPercentile = np.percentile(projected_depth, 5, axis = 0)[2]
+        projected_depth = projected_depth[ projected_depth[:, 2] > minPercentile + EPS, : ]
         
         # expand the depth value of pxiel to a 3 by 3 cross, so that more holes
         # and invalid values can be removed.

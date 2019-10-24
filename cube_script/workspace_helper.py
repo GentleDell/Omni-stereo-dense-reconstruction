@@ -19,6 +19,7 @@ import matplotlib.pyplot as plt
 
 from cam360 import Cam360
 from cubicmaps import CubicMaps
+from spherelib import eu2pol, pol2eu
 from read_model import read_cameras_text
 from view_selection import view_selection
 from scipy.spatial.transform import Rotation
@@ -65,16 +66,19 @@ EPS = 1e-8
 VIEW_ROT = np.array([[[-1,0,0], [0,0,-1], [0,-1,0]],
                      [[ 0,1,0], [0,0,-1], [-1,0,0]],
                      [[ 1,0,0], [0,0,-1], [0, 1,0]],
-                     [[0,-1,0], [0,0,-1], [ 1,0,0]],
+                     [[0,-1,0], [0,0,-1], [1, 0,0]],
                      [[ 1,0,0], [0, 1,0], [0,0, 1]],
                      [[ 1,0,0], [0,-1,0], [0,0,-1]]])
 
+# theta and phi, image coordinate i.e. (-y of the world corrdinate) is y axis;
+# (-x of the world coordinate) is x axis while the z axis is the same as the 
+# world coordniate. 
 VIEW_ANG = np.array([[np.pi/2,    0   ],
                      [np.pi/2, np.pi/2],
                      [np.pi/2, np.pi  ],
-                     [np.pi/2, np.pi*3/2,],
-                     [   0   , np.pi  ],
-                     [ np.pi , np.pi  ]])
+                     [np.pi/2, np.pi*3/2],
+                     [   0   ,  np.pi ],
+                     [ np.pi ,  np.pi]])
 
 BEST_OF_N_VIEWS = 20
 
@@ -170,7 +174,7 @@ def dense_from_cam360list(cam360_list: list, reference_image: int, workspace: st
         CM.wait()
         
         # modify the patch-match.cfg file to specify the images to be used
-        set_patchmatch_cfg(output_path, reference_image, scores_list, name_list, view, use_view_selection, use_geometric_filter)
+        set_patchmatch_cfg(output_path, reference_image, scores_list, name_list, view, use_geometric_filter)
         
         # start patch matching stereo
         command = patchmatch_path + \
@@ -210,7 +214,7 @@ def dense_from_cam360list(cam360_list: list, reference_image: int, workspace: st
                                       enable_geom = use_geometric_filter)
 
     world2ref = cam360_list[reference_image].rotation_mtx
-    if use_geometric_filter:
+    if use_geometric_filter and not use_view_selection:
         # save all views at a time        
         for ind, cam in enumerate(cam360_list):
             # rotate depth maps for the corresponding source view
@@ -224,7 +228,7 @@ def dense_from_cam360list(cam360_list: list, reference_image: int, workspace: st
         
             cam.depth = depth.rotate( cam.rotation_mtx.dot(world2ref.transpose()) ).texture[:,:,0]*255
             cam.cost  = cost.rotate ( cam.rotation_mtx.dot(world2ref.transpose()) ).texture[:,:,0]*255
-    else:        
+    else:                
         cam360_list[reference_image].depth = depth_list[0][:,:,0]
         cam360_list[reference_image].cost  = cost_list [0][:,:,0]
     
@@ -236,7 +240,7 @@ def dense_from_cam360list(cam360_list: list, reference_image: int, workspace: st
 
 
 def set_patchmatch_cfg(workspace: str, reference_image: int, score_list: list, name_list: list,
-                       view_ind : int, enable_view_selection: bool, use_geometry: bool):
+                       view_ind : int, use_geometry: bool):
     '''
         It keeps the top BEST_OF_N_VIEWS views to reconstruct scenes according
         to the given scores. To reduce computation cost, it only reconstruct 
@@ -399,7 +403,7 @@ def create_workspace_from_cam360_list( cam_list: list, refimage_index: int = -1,
                 warnings.warn("The {:d}th camera360 doesn't have valid textures; it will be skipped".format(ind))
                 continue            
         else:
-            enable_view_selection = (ind!=refimage_index) and view_selection  # not run view selectino on the reference view itself
+            enable_view_selection = (ind!=refimage_index) and view_selection  # not run view selection on the reference view itself
             
             # decompose omnidirectional image into 6 cubic maps and save them
             scores, img_names, camera_txt_flag, num_selected_view = decompose_and_save(src_cam, ref_cam, cubemap_resolution, work_dir, prefix="cam360", 
@@ -470,34 +474,72 @@ def decompose_and_save(src_cam: Cam360, ref_cam: Cam360, resolution: tuple, work
             check_path_exist(view_folder)
             check_path_exist(para_folder)            
             
-            # No matter view selection is enabled or not, regular cubic maps will be generated and saved
-            cubemap_obj.cubemap[ind] = cubemap_obj.cube_projection(cam = cam,
-                               direction  = np.flip(VIEW_ANG[ind]).tolist()+[np.pi/2, np.pi/2],  # since in cubeprojection, the angle is (phi, theta)
-                               resolution = resolution)
-            score = [1.5]
-            view_index[ind] += 1
-            image_name, camera_txt_flag = save_view_parameters(view_folder, para_folder, prefix, ind, int(view_index[ind]), camera_txt_flag, 
-                                                   cam, cubemap_obj, resolution, initial_pose, reference_pose )
-            name_list.append(image_name)
-            
-            # if view selection is enabled, better views will be selected and saved if it is possible
+            score = []
+            # If view selection si enabled, the function will 
+            # try to find a view with enough matches and triangulation 
+            # angle. If it is not found, the cubic map of the view
+            # will be used.
             if select_view:
-                cubemap_obj.cubemap[ind], initial_pose, score_vs = view_selection(cam, reference_cube[ind], initial_pose=VIEW_ANG[ind])
-                score.append(score_vs)
-                if score_vs is not None:
-                    view_index[ind] += 1
-                    score[0] = score[1] - 0.25   # for original view, the score for trianglation angle should be low, here use 0.25 as punishment
-                    image_name_vs, camera_txt_flag = save_view_parameters(view_folder, para_folder, prefix + '_selected', ind, int(view_index[ind]), camera_txt_flag, 
-                                                           cam, cubemap_obj, resolution, initial_pose, reference_pose )
-                    name_list.append(image_name_vs)
+                # horizontal views
+                if ind < 4:
+                    cubemap_obj.cubemap[ind], initial_pose, score_vs = view_selection(
+                                       cam, 
+                                       reference_cube[ind], 
+                                       initial_pose, 
+                                       reference_trans=reference_pose[1])
+                # the top and bottom views need to be rotated
+                elif ind == 4:
+                    cubemap_obj.cubemap[ind], initial_pose, score_vs = view_selection(
+                                       cam.rotate(alpha = (np.pi/2,0,0), order = (0,1,2)) , 
+                                       reference_cube[ind], 
+                                       initial_pose = VIEW_ANG[2], 
+                                       reference_trans = reference_pose[1])
+                elif ind == 5:
+                    cubemap_obj.cubemap[ind], initial_pose, score_vs = view_selection(
+                                       cam.rotate(alpha = (-np.pi/2,0,0), order = (0,1,2)), 
+                                       reference_cube[ind], 
+                                       initial_pose = VIEW_ANG[2], 
+                                       reference_trans = reference_pose[1])
+                else:
+                    ValueError("invalid index @ decompose_and_save()")
                     
+                viewSelectSuccess = score_vs is not None
+                if not viewSelectSuccess:
+                    score_vs = [1.5]
+                    initial_pose=VIEW_ANG[ind]
+                    cubemap_obj.cubemap[ind] = cubemap_obj.cube_projection(cam = cam,
+                                   direction  = np.flip(initial_pose).tolist()+[np.pi/2, np.pi/2],  # since in cubeprojection, the angle is (phi, theta)
+                                   resolution = resolution)   
                     
-            score_list = score_list + score        
+                score.append(score_vs) 
+                view_index[ind] += 1
+                image_name_vs, camera_txt_flag = save_view_parameters(
+                        view_folder, para_folder, prefix + '_selected', ind, 
+                        int(view_index[ind]), camera_txt_flag, 
+                        cam, cubemap_obj, resolution, initial_pose, reference_pose, viewSelectSuccess)
+                
+                name_list.append(image_name_vs)
+                
+            else:
+                # regular cubic maps will be generated and saved
+                cubemap_obj.cubemap[ind] = cubemap_obj.cube_projection(cam = cam,
+                                   direction  = np.flip(initial_pose).tolist()+[np.pi/2, np.pi/2],  # since in cubeprojection, the angle is (phi, theta)
+                                   resolution = resolution)
+                score = [2]
+                view_index[ind] += 1
+                image_name, camera_txt_flag = save_view_parameters(view_folder, para_folder, prefix, ind, int(view_index[ind]), camera_txt_flag, 
+                                                       cam, cubemap_obj, resolution, initial_pose, reference_pose )
+                name_list.append(image_name)
+                    
+            score_list = score_list + score
+            
     return score_list, name_list, camera_txt_flag, image_index
 
 
-def save_view_parameters(target_folder: str, para_folder: str, prefix: str, view_ind: int, image_index: int,  write_camera: bool, 
-                         cam: Cam360, cubemap_obj: CubicMaps, resolution: tuple , initial_pose: tuple, reference_pose: tuple):
+def save_view_parameters(target_folder: str, para_folder: str, prefix: str, 
+                         view_ind: int, image_index: int,  write_camera: bool, 
+                         cam: Cam360, cubemap_obj: CubicMaps, resolution: tuple , 
+                         initial_pose: tuple, reference_pose: tuple, withViewSelection: bool = False):
     
     image_path = cubemap_obj.save_cubemap(path = target_folder, prefix = prefix, index=[view_ind])   
     image_name = image_path[0].split('/')[-1]
@@ -518,14 +560,20 @@ def save_view_parameters(target_folder: str, para_folder: str, prefix: str, view
     
     # save poses
     source_pose = [cam.rotation_mtx, cam.translation_vec]
-    pose_colmap = convert_coordinate(source_pose, reference_pose, index_of_cubemap=view_ind, initial_pose = initial_pose)
+    pose_colmap = convert_coordinate(
+            source_pose, reference_pose, 
+            index_of_cubemap=view_ind, 
+            initial_pose = initial_pose, 
+            withViewSelection=withViewSelection
+            )
     save_pose(para_folder, pose_colmap, image_index, image_name, camera_id)  
     
     return image_name, write_camera
 
 
 
-def convert_coordinate(source_pose: list, reference_pose: list, index_of_cubemap: int, initial_pose: tuple=None):
+def convert_coordinate(source_pose: list, reference_pose: list, index_of_cubemap: int, 
+                       initial_pose: tuple=None, withViewSelection : bool = False):
     '''
         It computes the rotation and translation from the source view to 
         the reference view.
@@ -556,18 +604,50 @@ def convert_coordinate(source_pose: list, reference_pose: list, index_of_cubemap
     translation_ref = reference_pose[1]     # camera -> world under camera <=> world -> camera
     translation_src = source_pose[1]        # camera -> world under camera <=> world -> camera
    
-    if initial_pose is not None:
-        # mediate view    
+    # Horizontal 4 views
+    if index_of_cubemap < 4 or not withViewSelection:
         if initial_pose[1] == 0:
             med_view2colmap = Rotation.from_euler('x', initial_pose[0]).as_euler('zyx')
         elif initial_pose[0] == 0:
             med_view2colmap = Rotation.from_euler('z', initial_pose[1]).as_euler('zyx')
         else:
             med_view2colmap = Rotation.from_euler('zx', [initial_pose[1], initial_pose[0]]).as_euler('zyx')
-            
-        new_view2colmap = med_view2colmap + np.array([np.pi, 0, 0])
+
+        new_view2colmap = med_view2colmap + np.array([np.pi, 0, 0])    # convert from image coordinate to local coordinate
         src_tocolmap = Rotation.from_euler('zyx', new_view2colmap).as_dcm()
-    
+    # Top view 
+    elif index_of_cubemap == 4:
+        vec_tra = pol2eu(initial_pose[0], initial_pose[1] - np.pi, 1)   # pol2eu() is under local coordinate instead of image coordinate
+        vec_ori = np.array([[-1,0,0],[0,0,-1],[0,-1,0]]).dot(vec_tra)
+        angleX  = np.sign(vec_ori[1]) * np.arccos( np.sqrt(vec_ori[0]**2 + vec_ori[2]**2) / np.linalg.norm(vec_ori) )
+        angleY  = -1*np.sign(vec_ori[0]) * np.arccos( abs(vec_ori[2]) / np.sqrt(vec_ori[0]**2 + vec_ori[2]**2) )
+        
+        if angleX == 0:
+            med_view2colmap = Rotation.from_euler('y', angleY).as_euler('zyx')
+        elif angleY == 0:
+            med_view2colmap = Rotation.from_euler('x', angleX).as_euler('zyx')
+        else:
+            med_view2colmap = Rotation.from_euler('yx', [angleY, angleX]).as_euler('zyx')
+
+        new_view2colmap = med_view2colmap
+        src_tocolmap = Rotation.from_euler('zyx', new_view2colmap).as_dcm()
+    # Bottom view
+    else:
+        vec_tra = pol2eu(initial_pose[0], initial_pose[1] - np.pi, 1)
+        vec_ori = np.array([[-1,0,0],[0,0,1],[0,1,0]]).dot(vec_tra)
+        angleX  = -1*np.sign(vec_ori[1]) * np.arccos( np.sqrt(vec_ori[0]**2 + vec_ori[2]**2) / np.linalg.norm(vec_ori) )
+        angleY  = np.sign(vec_ori[0]) * np.arccos( abs(vec_ori[2]) / np.sqrt(vec_ori[0]**2 + vec_ori[2]**2) )
+        
+        if angleX == 0:
+            med_view2colmap = Rotation.from_euler('y', angleY).as_euler('zyx')
+        elif angleY == 0:
+            med_view2colmap = Rotation.from_euler('x', angleX).as_euler('zyx')
+        else:
+            med_view2colmap = Rotation.from_euler('yx', [angleY, angleX]).as_euler('zyx')
+
+        new_view2colmap = med_view2colmap + np.array([0, 0, np.pi])
+        src_tocolmap = Rotation.from_euler('zyx', new_view2colmap).as_dcm()
+        
     
     # Here rotations and translations are converted from cam360 to colmap
     # 
@@ -589,12 +669,10 @@ def convert_coordinate(source_pose: list, reference_pose: list, index_of_cubemap
     
     ref2src_rot = rotation_world2srcview.dot(rotation_refview2world)
     quat_rot  = Rotation.from_dcm(ref2src_rot).as_quat() 
-    quat_rot_colmap = [tmp if np.abs(tmp) > EPS else 0.0 for tmp in quat_rot[0:3]]
+    quat_rot_colmap = [tmp for tmp in quat_rot[0:3]]
     quat_rot_colmap.insert(0, quat_rot[3])
     
-    translation = np.array( [t if np.abs(t) > EPS \
-                               else 0.0 \
-                               for t in (-ref2src_rot.dot( ref_tocolmap.dot(translation_ref)) + src_tocolmap.dot(translation_src) ) ])
+    translation = np.array( [t for t in (-ref2src_rot.dot( ref_tocolmap.dot(translation_ref)) + src_tocolmap.dot(translation_src) ) ])
     
     return [quat_rot_colmap, translation]
 
