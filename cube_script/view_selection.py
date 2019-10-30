@@ -19,7 +19,7 @@ MIN_NUM_FEATURE = 20
 MIN_OVERLAPPING = 40
 MIN_TRIANGULATION = 6*np.pi/180
 
-UPDATE_RATE = 0.1
+UPDATE_RATE = 0.2
     
 
 def view_selection(cam:Cam360, reference:np.array, initial_pose: tuple, reference_trans: np.array, fov: tuple=(np.pi/2, np.pi/2),
@@ -86,6 +86,7 @@ def view_selection(cam:Cam360, reference:np.array, initial_pose: tuple, referenc
         >>> img, pose = view_selection(cam360, ref_view, 
                                        initial_pose=(np.pi/2, np.pi*3/2))
     '''
+    
     # if reference view and src view is colinear, skip them;
     # theta_ref == theta_src, phi_ref == phi_src or the other side.
     delta_trans = reference_trans - cam.translation_vec
@@ -136,7 +137,10 @@ def view_selection(cam:Cam360, reference:np.array, initial_pose: tuple, referenc
                         width_grids  = np.array([centroids[1][0] - image_center[0]])/(image_center[0]),
                         height_grids = np.array([centroids[1][1] - image_center[1]])/(image_center[1])
                         )
-                delta_phi, delta_theta = ref_phi[0]-src_phi[0], ref_theta[0]-src_theta[0]
+                
+                delta_phi   = ref_phi[0] - src_phi[0]
+                delta_phi   = delta_phi - 2*np.pi*np.sign(delta_phi)*(abs(delta_phi) > np.pi)
+                delta_theta = ref_theta[0]-src_theta[0]
                 
                 # update poses
                 phi = pose[0] - UPDATE_RATE*delta_phi

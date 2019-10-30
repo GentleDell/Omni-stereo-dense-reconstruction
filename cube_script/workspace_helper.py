@@ -487,7 +487,8 @@ def decompose_and_save(src_cam: Cam360, ref_cam: Cam360, resolution: tuple, work
                                        reference_cube[ind], 
                                        initial_pose, 
                                        reference_trans=reference_pose[1])
-                # the top and bottom views need to be rotated
+                # the top and bottom views need to be rotated so that them can be treated 
+                # as horizontal views.
                 elif ind == 4:
                     cubemap_obj.cubemap[ind], initial_pose, score_vs = view_selection(
                                        cam.rotate(alpha = (np.pi/2,0,0), order = (0,1,2)) , 
@@ -495,10 +496,15 @@ def decompose_and_save(src_cam: Cam360, ref_cam: Cam360, resolution: tuple, work
                                        initial_pose = VIEW_ANG[2], 
                                        reference_trans = reference_pose[1])
                 elif ind == 5:
+                    # assume that the ground is at z = 0
+                    # As the translation is from local to world so that here is src - ref 
+                    prior_vector = VIEW_ROT[2,:,:].dot( src_cam.translation_vec - np.array([reference_pose[1][0], reference_pose[1][1], 0]) )
+                    prior_angle  = np.array(eu2pol(np.array([prior_vector[0]]), np.array([prior_vector[1]]), np.array([prior_vector[2]]))[:2])
+                    
                     cubemap_obj.cubemap[ind], initial_pose, score_vs = view_selection(
                                        cam.rotate(alpha = (-np.pi/2,0,0), order = (0,1,2)), 
                                        reference_cube[ind], 
-                                       initial_pose = VIEW_ANG[2], 
+                                       initial_pose = prior_angle, 
                                        reference_trans = reference_pose[1])
                 else:
                     ValueError("invalid index @ decompose_and_save()")
