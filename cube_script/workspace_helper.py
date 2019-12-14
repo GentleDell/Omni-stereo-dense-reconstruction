@@ -21,7 +21,7 @@ from cam360 import Cam360
 from cubicmaps import CubicMaps
 from spherelib import eu2pol, pol2eu
 from read_model import read_cameras_text
-from view_selection import view_selection
+from view_selection import view_selection, sparseMatches as Matches, SAVE_REFERANCE, SAVE_SOURCE
 from scipy.spatial.transform import Rotation
 
 '''
@@ -59,6 +59,9 @@ view (the top view).
                                         z_0  y_0
 '''
 
+# FUNCTION SWITCHES
+DISABLE_INIT = False    # should be False in release
+
 # small number
 EPS = 1e-8
 
@@ -79,6 +82,9 @@ VIEW_ANG = np.array([[np.pi/2,    0   ],
                      [np.pi/2, np.pi*3/2],
                      [   0   ,  np.pi ],
                      [ np.pi ,  np.pi]])
+
+# field of view of SRC cubic maps
+CUBICVIEW_FOV   = np.pi*2/3
 
 BEST_OF_N_VIEWS = 20
 
@@ -407,7 +413,7 @@ def create_workspace_from_cam360_list( cam_list: list, refimage_index: int = -1,
             
             # decompose omnidirectional image into 6 cubic maps and save them
             scores, img_names, camera_txt_flag, num_selected_view = decompose_and_save(src_cam, ref_cam, cubemap_resolution, work_dir, prefix="cam360", 
-                                                                            number_of_views=number_of_views, image_index = ind+1, view_index = selected_view_index,
+                                                                            number_of_views=number_of_views, image_index = ind+1, refIndex = refimage_index, view_index = selected_view_index,
                                                                             camera_txt_flag = camera_txt_flag, select_view = enable_view_selection)
             views_score.append(scores)  
             views_names.append(img_names)
@@ -416,7 +422,7 @@ def create_workspace_from_cam360_list( cam_list: list, refimage_index: int = -1,
 
 
 def decompose_and_save(src_cam: Cam360, ref_cam: Cam360, resolution: tuple, work_dir: str, prefix: str,  image_index: int, 
-                       view_index: np.array, number_of_views: int=6, camera_txt_flag: bool=True, select_view: bool=False):
+                       view_index: np.array, refIndex = int, number_of_views: int=6, camera_txt_flag: bool=True, select_view: bool=False):
     """
         Given a cam360 objects, it decomposes the cam360 objs into 6 cubic maps
         and save them according to the view (back -> view0, front - view1 etc.).
@@ -452,7 +458,8 @@ def decompose_and_save(src_cam: Cam360, ref_cam: Cam360, resolution: tuple, work
         
         try:  # get the pose of the reference image
             reference_pose = [ref_cam.rotation_mtx, ref_cam.translation_vec]
-            reference_cube = cubemap_obj.sphere2cube(ref_cam, resolution=resolution)
+            reference_cube = cubemap_obj.sphere2cube(ref_cam, resolution=resolution, fov=CUBICVIEW_FOV)
+            
         except:
             raise ValueError("The reference camera360 doesn't have valid pose") 
         
@@ -482,30 +489,28 @@ def decompose_and_save(src_cam: Cam360, ref_cam: Cam360, resolution: tuple, work
             if select_view:
                 # horizontal views
                 if ind < 4:
-                    cubemap_obj.cubemap[ind], initial_pose, score_vs = view_selection(
+                    cubemap_obj.cubemap[ind], initial_pose, score_vs, matches = view_selection(
                                        cam, 
                                        reference_cube[ind], 
                                        initial_pose, 
-                                       reference_trans=reference_pose[1])
+                                       reference_trans=reference_pose[1],
+                                       fov=(CUBICVIEW_FOV, CUBICVIEW_FOV))
                 # the top and bottom views need to be rotated so that them can be treated 
                 # as horizontal views.
                 elif ind == 4:
-                    cubemap_obj.cubemap[ind], initial_pose, score_vs = view_selection(
+                    cubemap_obj.cubemap[ind], initial_pose, score_vs, matches = view_selection(
                                        cam.rotate(alpha = (np.pi/2,0,0), order = (0,1,2)) , 
                                        reference_cube[ind], 
                                        initial_pose = VIEW_ANG[2], 
-                                       reference_trans = reference_pose[1])
-                elif ind == 5:
-                    # assume that the ground is at z = 0
-                    # As the translation is from local to world so that here is src - ref 
-                    prior_vector = VIEW_ROT[2,:,:].dot( src_cam.translation_vec - np.array([reference_pose[1][0], reference_pose[1][1], 0]) )
-                    prior_angle  = np.array(eu2pol(np.array([prior_vector[0]]), np.array([prior_vector[1]]), np.array([prior_vector[2]]))[:2])
-                    
-                    cubemap_obj.cubemap[ind], initial_pose, score_vs = view_selection(
+                                       reference_trans = reference_pose[1],
+                                       fov=(CUBICVIEW_FOV, CUBICVIEW_FOV))
+                elif ind == 5:                    
+                    cubemap_obj.cubemap[ind], initial_pose, score_vs, matches = view_selection(
                                        cam.rotate(alpha = (-np.pi/2,0,0), order = (0,1,2)), 
                                        reference_cube[ind], 
-                                       initial_pose = prior_angle, 
-                                       reference_trans = reference_pose[1])
+                                       initial_pose = VIEW_ANG[2], 
+                                       reference_trans = reference_pose[1],
+                                       fov=(CUBICVIEW_FOV, CUBICVIEW_FOV))
                 else:
                     ValueError("invalid index @ decompose_and_save()")
                     
@@ -514,38 +519,46 @@ def decompose_and_save(src_cam: Cam360, ref_cam: Cam360, resolution: tuple, work
                     score_vs = [1.5]
                     initial_pose=VIEW_ANG[ind]
                     cubemap_obj.cubemap[ind] = cubemap_obj.cube_projection(cam = cam,
-                                   direction  = np.flip(initial_pose).tolist()+[np.pi/2, np.pi/2],  # since in cubeprojection, the angle is (phi, theta)
+                                   direction  = np.flip(initial_pose).tolist()+[CUBICVIEW_FOV, CUBICVIEW_FOV],  # since in cubeprojection, the angle is (phi, theta)
                                    resolution = resolution)   
+                
+                # For comparison, should be commented
+                if DISABLE_INIT:
+                    matches = Matches([],[],[])
                     
                 score.append(score_vs) 
                 view_index[ind] += 1
                 image_name_vs, camera_txt_flag = save_view_parameters(
                         view_folder, para_folder, prefix + '_selected', ind, 
-                        int(view_index[ind]), camera_txt_flag, 
-                        cam, cubemap_obj, resolution, initial_pose, reference_pose, viewSelectSuccess)
+                        int(view_index[ind]), refIndex, camera_txt_flag, 
+                        cam, cubemap_obj, resolution, 
+                        initial_pose, reference_pose, 
+                        viewSelectSuccess, matches)
                 
                 name_list.append(image_name_vs)
                 
             else:
                 # regular cubic maps will be generated and saved
                 cubemap_obj.cubemap[ind] = cubemap_obj.cube_projection(cam = cam,
-                                   direction  = np.flip(initial_pose).tolist()+[np.pi/2, np.pi/2],  # since in cubeprojection, the angle is (phi, theta)
+                                   direction  = np.flip(initial_pose).tolist()+[CUBICVIEW_FOV, CUBICVIEW_FOV],  # since in cubeprojection, the angle is (phi, theta)
                                    resolution = resolution)
                 score = [2]
                 view_index[ind] += 1
-                image_name, camera_txt_flag = save_view_parameters(view_folder, para_folder, prefix, ind, int(view_index[ind]), camera_txt_flag, 
-                                                       cam, cubemap_obj, resolution, initial_pose, reference_pose )
+                matches = Matches([],[],[])
+                image_name, camera_txt_flag = save_view_parameters(view_folder, para_folder, prefix, ind, int(view_index[ind]), refIndex, camera_txt_flag, 
+                                                       cam, cubemap_obj, resolution, initial_pose, reference_pose, False, matches)
                 name_list.append(image_name)
-                    
+        
             score_list = score_list + score
             
     return score_list, name_list, camera_txt_flag, image_index
 
 
 def save_view_parameters(target_folder: str, para_folder: str, prefix: str, 
-                         view_ind: int, image_index: int,  write_camera: bool, 
+                         view_ind: int, image_index: int, refIndex: int, write_camera: bool, 
                          cam: Cam360, cubemap_obj: CubicMaps, resolution: tuple , 
-                         initial_pose: tuple, reference_pose: tuple, withViewSelection: bool = False):
+                         initial_pose: tuple, reference_pose: tuple, 
+                         withViewSelection: bool, sparseMatches: Matches):
     
     image_path = cubemap_obj.save_cubemap(path = target_folder, prefix = prefix, index=[view_ind])   
     image_name = image_path[0].split('/')[-1]
@@ -553,14 +566,14 @@ def save_view_parameters(target_folder: str, para_folder: str, prefix: str,
     # TODO: support images taken by different camera models
     
     # save parameters
-    camera_parameters = [resolution[0]/2, resolution[1]/2, resolution[0]/2, resolution[1]/2]
+    camera_parameters = [resolution[0]/2/np.tan(CUBICVIEW_FOV/2), resolution[1]/2/np.tan(CUBICVIEW_FOV/2), resolution[0]/2, resolution[1]/2]
     if write_camera or ( not os.path.exists(os.path.join(para_folder, 'cameras.txt')) ):
     # if there is no parameter file or no need to write a file  
         camera_id = create_camera_model(path=para_folder, camera_para = [camera_parameters], camera_size=resolution)
-        save_3d_points(para_folder)
         
         # only write once
         write_camera = False
+        
     else:
         camera_id = 1
     
@@ -574,6 +587,22 @@ def save_view_parameters(target_folder: str, para_folder: str, prefix: str,
             )
     save_pose(para_folder, pose_colmap, image_index, image_name, camera_id)  
     
+    # save points
+    f = open(os.path.join(para_folder, 'points3D.txt'), 'a+')
+    f.close()
+    if len(sparseMatches.keyPointRef) > 0:       
+        cameraPara = np.array([[camera_parameters[0], 0, camera_parameters[2]], 
+                               [0, camera_parameters[1], camera_parameters[3]],
+                               [0, 0, 1]])
+        sparseMatches.setIntrinsics(cameraPara)
+        
+        quaternion = [tmp for tmp in pose_colmap[0][1:4]] + [pose_colmap[0][0]]
+        rotation   = Rotation.from_quat(quaternion).as_dcm()
+        sparseMatches.setExtrinsics(rotation, np.array(pose_colmap[1]))
+    
+        sparseMatches.triangulateMatches()
+        sparseMatches.savePoints(para_folder, refIndex + 1, image_index) 
+        
     return image_name, write_camera
 
 
@@ -714,16 +743,7 @@ def save_pose(para_folder: str, poses: list, image_index: int, image_name: str, 
             f.write( ' ' + str(trans))
         f.write( ' ' + str(camera_id) + ' ' + image_name)
         f.write('\n\n')
-        f.close()    
-
-
-def save_3d_points(path: str):
-    '''
-        It creates an empty point3D.txt file at the given path.
-    '''
-    with open(os.path.join(path, 'points3D.txt'), "a+") as f: 
-        f.closed
-        
+        f.close()            
 
 def create_depth_workspace(image_dir: str='', file_suffix: str='exr', work_dir: str='./',
                            radius_depth: Optional[bool] = False, cam_para: Optional[list] = None,
@@ -1012,7 +1032,9 @@ def project_colmap_maps(path: str, view_name: str = None, views_list: list = [],
     
     if use_radial_dist:
         if camera_para is None:
-            camera_para = [ cubemap.depthmap[0].shape[0]/2 ] * 4 
+            camera_para = [ cubemap.depthmap[0].shape[0]/2/np.tan(CUBICVIEW_FOV/2),    # fx
+                            cubemap.depthmap[0].shape[0]/2/np.tan(CUBICVIEW_FOV/2),    # fy
+                            cubemap.depthmap[0].shape[0]/2, cubemap.depthmap[0].shape[0]/2]    # cx, cy 
         elif len(camera_para) != 4:
             raise ValueError("Inpute ERROR. Camera parameters should have 4 parameters:[fx, fy, cx, cy].")
         
@@ -1022,7 +1044,7 @@ def project_colmap_maps(path: str, view_name: str = None, views_list: list = [],
             elif map_type == 'normal_maps':
                 warnings.warn("Project normal maps are not supported by now.")
     
-    cubemap.cube2sphere_fast(resolution = output_resolution)
+    cubemap.cube2sphere_fast(resolution = output_resolution, fov = CUBICVIEW_FOV)
     
     if save:
         if map_type == 'depth_maps' or 'cost_maps':
@@ -1033,7 +1055,7 @@ def project_colmap_maps(path: str, view_name: str = None, views_list: list = [],
     return cubemap.omnimage
     
 
-def evaluate(estimation: np.array, GT: np.array, checking_line: int = 100, max_: int = 25, error_threshold: int = 2, inf_value: int=100, save: bool = False,):   
+def evaluate(estimation: np.array, GT: np.array, checking_line: int = 100, max_: int = 25, error_threshold: int = 2, inf_value: int=50, save: bool = False,):   
     '''
         It compares the two given images. 
         

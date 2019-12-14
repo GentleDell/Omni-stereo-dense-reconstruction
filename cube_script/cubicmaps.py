@@ -17,7 +17,9 @@ from read_dense import read_array
  
 from interpolation.splines import CubicSplines
 
-
+# The maximum and minimum value of depth 
+_MAXIMUM_DEPTH = 50
+_MINIMUM_DEPTH = 0.001
 
 class CubicMaps:
     """
@@ -225,7 +227,7 @@ class CubicMaps:
         return radius_depth
     
     
-    def cube2sphere_fast( self, cube_list: list = None, resolution: tuple = (256, 512), order: Optional[list] = None):
+    def cube2sphere_fast( self, cube_list: list = None, resolution: tuple = (256, 512), fov: float = np.pi/2, order: Optional[list] = None):
         """
             It projects a list of six cubic images to an omnidirectional image. 
             As it passes one image at a time, it only needs 6 passes to obtain the omni image and so it is faster than the cube2sphere_std().
@@ -312,19 +314,24 @@ class CubicMaps:
             cube_res_row = cube_list[0].shape[0]
             cube_res_col = cube_list[0].shape[1]
             
-            delta_row = 2/cube_res_row
-            delta_col = 2/cube_res_col
+            delta_row = 2*np.tan(fov/2)/cube_res_row
+            delta_col = 2*np.tan(fov/2)/cube_res_col
             
             for face in range(len(cube_list)):
-                points, mask_face  = self.spherical2img(face, resolution)
+                points, mask_face  = self.spherical2img(face, resolution, fov)
                 row = np.rint(points[:,0]/delta_row - 1).astype(int).clip(min = 0, max = cube_res_row-1)
                 col = np.rint(points[:,1]/delta_col - 1).astype(int).clip(min = 0, max = cube_res_col-1)
-                Omni_image[ mask_face, :] = cube_list[face][row, col]
+            
+                tempTexture = cube_list[face][row, col]
+                tempImage = Omni_image[ mask_face, :]
+                mask = np.logical_or(tempImage <= _MINIMUM_DEPTH, tempImage >= _MAXIMUM_DEPTH)      # only update invalid depth
+                tempImage[mask] = tempTexture[mask]
+                Omni_image[ mask_face, : ] = tempImage
                 
         self._omnimage = Omni_image.reshape([resolution[0], resolution[1], -1])
         
     
-    def spherical2img(self, face_num: int, resolution: np.array) -> np.array:
+    def spherical2img(self, face_num: int, resolution: np.array, fov:float = np.pi/2) -> np.array:
         """
             For each pixel on the unit sphere, this function computes the position of the pixel in corresponding cubic image.
                 
@@ -348,15 +355,16 @@ class CubicMaps:
         phi   = np.linspace(0, 2*np.pi, num = resolution[1])
         theta = np.linspace(0, np.pi  , num = resolution[0])
         grid_phi, grid_theta = np.meshgrid(phi, theta)
+        halfImageSizeNorm = np.tan(fov/2)
         
         # deal with the 4 horizontal surfaces
         if face_num < 4 and face_num >= 0:
             # generate mask using element wise bool operation
             if face_num == 0:
-                mask_phi = (grid_phi - face_num*np.pi/2 < np.pi/4) + (grid_phi - face_num*np.pi/2 > -np.pi/4 + (face_num==0)*2*np.pi)
+                mask_phi = (grid_phi - face_num*np.pi/2 < fov/2) + (grid_phi - face_num*np.pi/2 > -fov/2 + (face_num==0)*2*np.pi)
             else:
-                mask_phi = (grid_phi - face_num*np.pi/2 < np.pi/4) * (grid_phi - face_num*np.pi/2 > -np.pi/4 + (face_num==0)*2*np.pi)
-            mask_theta = (grid_theta > np.pi/4) * (grid_theta < 3*np.pi/4)
+                mask_phi = (grid_phi - face_num*np.pi/2 < fov/2) * (grid_phi - face_num*np.pi/2 > -fov/2 + (face_num==0)*2*np.pi)
+            mask_theta = (grid_theta > np.pi/2 - fov/2) * (grid_theta < np.pi/2 + fov/2)
             mask_face  = mask_theta * mask_phi
             mask_face  = mask_face.flatten()   
             
@@ -365,19 +373,19 @@ class CubicMaps:
             theta = grid_theta.flatten()[mask_face]
             
             # normalized image coordinates
-            u = 1 - np.tan(phi)
-            v = 1 - np.sqrt(1 + np.power(np.tan(phi), 2))/np.tan(theta)
+            u = halfImageSizeNorm - np.tan(phi)
+            v = halfImageSizeNorm - np.sqrt(1 + np.power(np.tan(phi), 2))/np.tan(theta)
         
         # the top and bottom surface 
         else:
             # generate mask using element wise bool operation
-            mask_face0 = np.abs(1/np.cos(grid_phi)/(np.tan(grid_theta) + 1e-16)) > 1
-            mask_face1 = np.abs(1/np.cos(grid_phi-np.pi/2)/(np.tan(grid_theta) + 1e-16)) > 1
-            mask_face2 = np.abs(1/np.cos(grid_phi-np.pi)/(np.tan(grid_theta) + 1e-16)) > 1
-            mask_face3 = np.abs(1/np.cos(grid_phi-3*np.pi/2)/(np.tan(grid_theta) + 1e-16)) > 1
+            mask_face0 = np.abs(1/np.cos(grid_phi)/(np.tan(grid_theta) + 1e-16)) > halfImageSizeNorm 
+            mask_face1 = np.abs(1/np.cos(grid_phi-np.pi/2)/(np.tan(grid_theta) + 1e-16)) > halfImageSizeNorm
+            mask_face2 = np.abs(1/np.cos(grid_phi-np.pi)/(np.tan(grid_theta) + 1e-16)) > halfImageSizeNorm
+            mask_face3 = np.abs(1/np.cos(grid_phi-3*np.pi/2)/(np.tan(grid_theta) + 1e-16)) > halfImageSizeNorm
             
             if face_num == 4:
-                mask_center = (grid_theta < np.pi/2)
+                mask_center = (grid_theta < fov/2)
                 
                 # combine all masks 
                 mask_face = mask_center*mask_face0*mask_face1*mask_face2*mask_face3
@@ -387,11 +395,11 @@ class CubicMaps:
                 theta = grid_theta.flatten()[mask_face]
                 
                 # normalized image coordinates
-                u = 1 - np.tan(theta)*np.sin(phi)
-                v = 1 - np.tan(theta)*np.cos(phi)
+                u = halfImageSizeNorm - np.tan(theta)*np.sin(phi)
+                v = halfImageSizeNorm - np.tan(theta)*np.cos(phi)
                 
             elif face_num == 5:
-                mask_center = (grid_theta > np.pi/2)
+                mask_center = (grid_theta > np.pi - fov/2)
                 
                 # combine all masks 
                 mask_face = mask_center*mask_face0*mask_face1*mask_face2*mask_face3
@@ -401,8 +409,8 @@ class CubicMaps:
                 theta = grid_theta.flatten()[mask_face]
                 
                 # normalized image coordinates
-                u = 1 + np.tan(theta)*np.sin(phi)
-                v = 1 - np.tan(theta)*np.cos(phi)
+                u = halfImageSizeNorm + np.tan(theta)*np.sin(phi)
+                v = halfImageSizeNorm - np.tan(theta)*np.cos(phi)
         
         points  = np.column_stack((v, u))
         
@@ -526,7 +534,7 @@ class CubicMaps:
         
         # obtain the texture
         for ct in range(phi_grids.shape[0]):
-            facenum_pixel = self.angle2pixel(phi_grids[ct], theta_grids[ct])
+            facenum_pixel = self.angle2pixel(phi_grids[ct], theta_grids[ct], fov)
             pixels.append(facenum_pixel)   
         # flip the order resulted from the 'reshape' 
         pixels = np.flip(np.array(pixels)[:,0,:],axis = -1)
@@ -539,7 +547,7 @@ class CubicMaps:
         return texture.reshape([resolution[0], resolution[1], 3])
     
     
-    def angle2pixel(self, phi: float, theta: float):
+    def angle2pixel(self, phi: float, theta: float, fov: float):
         """
             It projects a given pixel on the sphere to the corresponding pixel on cubic faces.
                 
@@ -557,7 +565,7 @@ class CubicMaps:
                 face: the index of the cubic face where the projected pixel locates;
                 x, y: location of the projected pixel under image coordinate.
         """
-        face,z = self.which_face(phi,theta)
+        face,z = self.which_face(phi,theta, fov)
         
         if face == 0:
             x, y = np.tan(phi), -z
@@ -576,7 +584,7 @@ class CubicMaps:
         return np.array([[face, x, y]])
         
     
-    def which_face(self, phi: float, theta: float):
+    def which_face(self, phi: float, theta: float, fov: float):
         """
             It returns the index of the cubic face where the given pixel on the sphere corresponds to 
             as well as the z coordinate of the prjected pixel (can be used as 'y' under image coordinate).
@@ -595,7 +603,7 @@ class CubicMaps:
                 face: the index of the cubic face where the projected pixel locates;
                 z: z coordinate of the prjected pixel.
         """    
-        if phi <= np.pi/4 or phi > 7*np.pi/4:
+        if phi <= fov/2 or phi > 2*np.pi - fov/2:
             z = 1/np.cos(phi)/(np.tan(theta) + 1e-16)
             if z < -1:
                 face, z = 5, -1
@@ -603,7 +611,7 @@ class CubicMaps:
                 face, z = 4, 1
             else:
                 face = 0
-        elif np.pi/4 < phi <= 3*np.pi/4:
+        elif fov/2 < phi <= np.pi/2 + fov/2:
             z = 1/np.cos(phi-np.pi/2)/(np.tan(theta) + 1e-16)
             if z < -1:
                 face, z = 5, -1
@@ -611,7 +619,7 @@ class CubicMaps:
                 face, z = 4, 1
             else:
                 face = 1
-        elif 3*np.pi/4 < phi <= 5*np.pi/4:
+        elif np.pi/2 + fov/2 < phi <= np.pi + fov/2:
             z = 1/np.cos(phi-np.pi)/(np.tan(theta) + 1e-16)
             if z < -1:
                 face, z = 5, -1
@@ -619,7 +627,7 @@ class CubicMaps:
                 face, z = 4, 1
             else:
                 face = 2
-        elif 5*np.pi/4 < phi <= 7*np.pi/4:
+        elif np.pi + fov/2 < phi <= 2*np.pi - fov/2:
             z = 1/np.cos(phi-3*np.pi/2)/(np.tan(theta) + 1e-16)
             if z < -1:
                 face, z = 5, -1
@@ -630,7 +638,7 @@ class CubicMaps:
         return face, z
         
 
-    def sphere2cube (self, cam:'cam360', resolution: tuple=(256,256), dist: float=None, is_depth: bool = False):
+    def sphere2cube (self, cam:'cam360', resolution: tuple=(256,256), dist: float=None, is_depth: bool = False, fov: float = np.pi/2):
         """
             Description: 
             ----------
@@ -665,8 +673,8 @@ class CubicMaps:
             
     # generate cubic maps
         cubic_maps = []        
-        # enlarge field of view to include more information for further cube->sphere reconstruction4
-        delta_angle = np.pi/2
+        # enlarge field of view to include more information for further cube->sphere reconstruction
+        delta_angle = fov
         
         # back view
         cubic_maps.append(self.cube_projection(cam, (0,         np.pi/2, delta_angle, delta_angle), resolution, is_depth=is_depth))
@@ -929,8 +937,12 @@ class CubicMaps:
             
             
     def filt_depthoutliers(self, depth_map: np.array) -> np.array:
-        min_depth, max_depth = np.percentile(depth_map, [5, 95])
-        depth_map[depth_map < min_depth] = min_depth
-        depth_map[depth_map > max_depth] = max_depth
+#        min_depth, max_depth = np.percentile(depth_map, [5, 95])
+#        depth_map[depth_map < min_depth] = min_depth
+#        depth_map[depth_map > max_depth] = max_depth
+        
+        depth_map[depth_map<_MINIMUM_DEPTH] = -1
+        depth_map[depth_map>_MAXIMUM_DEPTH] = -1
+        
         return depth_map
 ###### end of adapted codes ###### 
