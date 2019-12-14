@@ -20,6 +20,7 @@ import matplotlib.pyplot as plt
 from cam360 import Cam360
 from cubicmaps import CubicMaps
 from spherelib import eu2pol, pol2eu
+from view_synthesis import synthesize_view
 from read_model import read_cameras_text
 from view_selection import view_selection, sparseMatches as Matches, SAVE_REFERANCE, SAVE_SOURCE
 from scipy.spatial.transform import Rotation
@@ -59,8 +60,8 @@ view (the top view).
                                         z_0  y_0
 '''
 
-# FUNCTION SWITCHES
-DISABLE_INIT = False    # should be False in release
+# FUNCTION SWITCHES -- if enable initialization, the reference camera must be the first element of the cam360 list
+DISABLE_INIT = True
 
 # small number
 EPS = 1e-8
@@ -1044,7 +1045,11 @@ def project_colmap_maps(path: str, view_name: str = None, views_list: list = [],
             elif map_type == 'normal_maps':
                 warnings.warn("Project normal maps are not supported by now.")
     
-    cubemap.cube2sphere_fast(resolution = output_resolution, fov = CUBICVIEW_FOV)
+    if CUBICVIEW_FOV <= np.pi/2:
+        cubemap.cube2sphere_fast(resolution = output_resolution, fov = CUBICVIEW_FOV)
+    else:
+        # think about cost maps
+        cubemap.depthmap = viewsfusion(cubemap.depthmap, output_resolution)
     
     if save:
         if map_type == 'depth_maps' or 'cost_maps':
@@ -1054,6 +1059,39 @@ def project_colmap_maps(path: str, view_name: str = None, views_list: list = [],
     
     return cubemap.omnimage
     
+
+def viewsfusion( depthList: list, resolution: tuple ):
+
+    cam360List = []
+    cubeTemp = CubicMaps()
+    
+    for ind, view in enumerate(depthList):
+        depthTemp = [np.zeros(depthList[0].shape)] * 6
+        depthTemp[ind] = depthList[ind]
+        
+        cubeTemp.depthmap = depthTemp
+        cubeTemp.cube2sphere_fast(resolution = resolution, fov = CUBICVIEW_FOV)
+        
+        cam360Temp = Cam360(
+                rotation_mtx = np.eye(3), 
+                translation_vec = np.array([0,0,0]), 
+                height = resolution[0], 
+                width  = resolution[1], 
+                channels = 1, 
+                texture  = np.zeros(resolution), 
+                depth    = cubeTemp.depth)        
+        
+        cam360List.append(cam360Temp)        
+    
+    method = 'sort'    
+    output_depth = True
+    rotation = np.eye(3)
+    translation = np.array([8,8,1])
+    Syn_view, Syn_depth = synthesize_view(cam360List, rotation, translation, 
+                                          resolution, with_depth = output_depth, 
+                                          method = method, parameters = 4)    
+    return Syn_depth    
+
 
 def evaluate(estimation: np.array, GT: np.array, checking_line: int = 100, max_: int = 25, error_threshold: int = 2, inf_value: int=50, save: bool = False,):   
     '''

@@ -321,12 +321,7 @@ class CubicMaps:
                 points, mask_face  = self.spherical2img(face, resolution, fov)
                 row = np.rint(points[:,0]/delta_row - 1).astype(int).clip(min = 0, max = cube_res_row-1)
                 col = np.rint(points[:,1]/delta_col - 1).astype(int).clip(min = 0, max = cube_res_col-1)
-            
-                tempTexture = cube_list[face][row, col]
-                tempImage = Omni_image[ mask_face, :]
-                mask = np.logical_or(tempImage <= _MINIMUM_DEPTH, tempImage >= _MAXIMUM_DEPTH)      # only update invalid depth
-                tempImage[mask] = tempTexture[mask]
-                Omni_image[ mask_face, : ] = tempImage
+                Omni_image[ mask_face, : ] = cube_list[face][row, col]
                 
         self._omnimage = Omni_image.reshape([resolution[0], resolution[1], -1])
         
@@ -933,7 +928,7 @@ class CubicMaps:
             self._depthmap.append(np.expand_dims(depth_map, axis = 2))
         
         while 6 > len(self._depthmap):    # 6 is the number of all cubic maps
-                self._depthmap.append(np.zeros(self._depthmap[0].shape))
+            self._depthmap.append(np.zeros(self._depthmap[0].shape))
             
             
     def filt_depthoutliers(self, depth_map: np.array) -> np.array:
