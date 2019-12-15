@@ -404,8 +404,9 @@ def get_texture(texture_index: np.array, cam360_list: list, resolution: tuple, w
         syn_view[ pixel_index[:, 0], pixel_index[:, 1],: ] = cam_ravel[ pixel_index[:,2], : ]
         
     if with_depth:
-        # initialize the synthesis depth map
+        # initialize the synthesis depth map and cost map
         depth_view = np.zeros(resolution)
+        cost_view  = np.zeros(resolution)
         
         for ind in range(len(cam360_list)):
         
@@ -413,10 +414,12 @@ def get_texture(texture_index: np.array, cam360_list: list, resolution: tuple, w
             
             pixel_index = texture_index[ texture_index[:,-1] == ind  ].astype(int)
             dep_ravel = cam.depth.reshape([-1])
+            cost_ravel= cam.cost.reshape([-1])
             
             depth_view[ pixel_index[:, 0], pixel_index[:, 1] ] = dep_ravel[ pixel_index[:,2] ]
-        
-        return syn_view, depth_view
+            cost_view [ pixel_index[:, 0], pixel_index[:, 1] ] = cost_ravel[ pixel_index[:,2] ]
+            
+        return syn_view, depth_view, cost_view
         
     return syn_view
 

@@ -268,7 +268,11 @@ class CubicMaps:
                 cube_list = self._cubemap.copy()
                 is_texture = True
             else:
-                raise ValueError('Bad input! Invalid input image list.')       
+                raise ValueError('Bad input! Invalid input image list.')    
+        elif cube_list[0].shape[2] == 3:
+            is_texture = True
+        else:
+            is_texture = False
         
         # check the consistency of images' size
         for ind, cube in enumerate(cube_list):
@@ -321,10 +325,15 @@ class CubicMaps:
                 points, mask_face  = self.spherical2img(face, resolution, fov)
                 row = np.rint(points[:,0]/delta_row - 1).astype(int).clip(min = 0, max = cube_res_row-1)
                 col = np.rint(points[:,1]/delta_col - 1).astype(int).clip(min = 0, max = cube_res_col-1)
-                Omni_image[ mask_face, : ] = cube_list[face][row, col]
+                
+                tempTexture = cube_list[face][row, col]
+                tempImage = Omni_image[ mask_face, :]
+                mask = np.logical_or(tempImage <= _MINIMUM_DEPTH, tempImage >= _MAXIMUM_DEPTH)      # only update invalid depth
+                tempImage[mask] = tempTexture[mask]
+                Omni_image[ mask_face, : ] = tempImage
                 
         self._omnimage = Omni_image.reshape([resolution[0], resolution[1], -1])
-        
+        return self._omnimage
     
     def spherical2img(self, face_num: int, resolution: np.array, fov:float = np.pi/2) -> np.array:
         """

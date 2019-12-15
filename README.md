@@ -17,10 +17,11 @@ To deal with distortions of 360 images and to estimate depth maps, cubic project
   [matplotlib](https://matplotlib.org/), 
   [scipy](https://www.scipy.org/), 
   [OpenCV](https://opencv.org) (SIFT is enabled), 
-  [pyshtools](https://pypi.org/project/pyshtools/4.0/),
+  [pyshtools](https://pypi.org/project/pyshtools/),
   [interpolation](https://pypi.org/project/interpolation/),
   [scikit-image](https://scikit-image.org/docs/dev/install.html),
-  [pytorch](https://pytorch.org/), e.g. conda install -c pytorch pytorch.
+  [open3d](https://anaconda.org/open3d-admin/open3d)
+  [pytorch](https://pytorch.org/), e.g. conda install pytorch torchvision cudatoolkit=10.1.
 
 - To run dense reconstruction correctly, a computer with Nvidia GPUs equipped and [CUDA](https://developer.nvidia.com/cuda-downloads) installed is necessary. If high resolution images are used for reconstruction, more GPU memory are required. Besides, for depth estimation, it is enough to install [COLMAP](https://colmap.github.io/). But to execute view synthesis, the modified COLMAP in [this repository](https://github.com/GentleDell/Omni-stereo-dense-reconstruction/tree/master/PatchMatchStereo_GPU) has to be installed.
 

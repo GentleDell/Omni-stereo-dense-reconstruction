@@ -203,23 +203,15 @@ def dense_from_cam360list(cam360_list: list, reference_image: int, workspace: st
     print("\n\nReorganizing workspace ...")
     organize_workspace(workspace=workspace, is_geometric=use_geometric_filter)
 
-    # project cubic depth to omnidirectional depthmap
-    print("\n\nReprojecting cubic depth to 360 depth ...")
-    resolution = [cam360_list[0]._height, cam360_list[0]._width]
-    depth_list = reconstruct_omni_maps(omni_workspace = os.path.join(workspace, 'omni_depthmap/depth_maps/*'), 
-                                       view_to_syn = views_for_depth, 
-                                       maps_type   = 'depth_maps',
-                                       resolution  = resolution,
-                                       enable_geom = use_geometric_filter)
+    # project cubic depth and cost to omnidirectional image 
+    print("\n\nReprojecting cubic depth and cost to 360 image ...")
+    resolution = (cam360_list[0]._height, cam360_list[0]._width)
+    depth_list, cost_list = reconstruct_omni_maps(omni_workspace = os.path.join(workspace, 'omni_depthmap/depth_maps/*'), 
+                                                  view_to_syn = views_for_depth, 
+                                                  maps_type   = 'depth_maps',
+                                                  resolution  = resolution,
+                                                  enable_geom = use_geometric_filter)
     
-    # project cost maps
-    print("\n\nReprojecting cost maps ...")
-    cost_list = reconstruct_omni_maps(omni_workspace = os.path.join(workspace, 'omni_depthmap/cost_maps/*'), 
-                                      view_to_syn = views_for_depth, 
-                                      maps_type   = 'cost_maps',
-                                      resolution  = resolution,
-                                      enable_geom = use_geometric_filter)
-
     world2ref = cam360_list[reference_image].rotation_mtx
     if use_geometric_filter and not use_view_selection:
         # save all views at a time        
@@ -941,7 +933,7 @@ def reconstruct_omni_maps(omni_workspace: str, Camera_parameter: list = None,
         Parameters
         ----------    
         omni_workspace: str
-            The path to the /workspace/omni_depthmap
+            The path to the /workspace
         
         Camera_parameter: list
             Camera paraeters to be used for projection
@@ -964,9 +956,10 @@ def reconstruct_omni_maps(omni_workspace: str, Camera_parameter: list = None,
             
     '''
     depth_list = []
+    cost_list  = []
     for folder in sorted( glob.glob( omni_workspace )):
         file_name = folder.split('/')[-1]
-        omni_depth = project_colmap_maps(path=folder,
+        omni_depth, omni_cost = project_colmap_maps(path=folder,
                                          view_name=file_name,
                                          views_list=[num for num in range(view_to_syn)],
                                          output_resolution=resolution, 
@@ -975,12 +968,14 @@ def reconstruct_omni_maps(omni_workspace: str, Camera_parameter: list = None,
                                          map_type=maps_type,
                                          save=save_omni)
         depth_list.append(omni_depth)
-    return depth_list
+        cost_list.append(omni_cost)
+        
+    return depth_list, cost_list
         
 
 def project_colmap_maps(path: str, view_name: str = None, views_list: list = [],
-                         output_resolution: tuple=None, use_radial_dist: bool = False,
-                         camera_para: list=None, map_type: str="depth_maps", save: bool = True) -> np.array:
+                        output_resolution: tuple=None, use_radial_dist: bool = False,
+                        camera_para: list=None, map_type: str="depth_maps", save: bool = True) -> np.array:
     '''
         It loads 6 or 4 cubemaps from the given path and merge them to a omnidirectional depth map.
         
@@ -1026,71 +1021,80 @@ def project_colmap_maps(path: str, view_name: str = None, views_list: list = [],
     elif view_name is None:
         raise ValueError("Input ERROR! Please specify the name of the views to be loaded.")
     else:
-        path_to_file = glob.glob( os.path.join(path, view_name + '_view*') )
+        pathCost = os.path.join('/'.join(path.split('/')[:-2]), 'cost_maps/' + view_name)
+        
+        path_to_depthfile = glob.glob( os.path.join(path, view_name + '_view*') )
+        path_to_costfile  = glob.glob( os.path.join(pathCost, view_name + '_view*') )
     
-    cubemap = CubicMaps()
-    cubemap.load_depthmap(path_to_file=path_to_file, type_ = map_type)
+    depthcubemap = CubicMaps()
+    costcubemap  = CubicMaps()
+    depthcubemap.load_depthmap(path_to_file=path_to_depthfile, type_ = map_type)
+    costcubemap.load_depthmap(path_to_file=path_to_costfile, type_ = map_type)
     
     if use_radial_dist:
         if camera_para is None:
-            camera_para = [ cubemap.depthmap[0].shape[0]/2/np.tan(CUBICVIEW_FOV/2),    # fx
-                            cubemap.depthmap[0].shape[0]/2/np.tan(CUBICVIEW_FOV/2),    # fy
-                            cubemap.depthmap[0].shape[0]/2, cubemap.depthmap[0].shape[0]/2]    # cx, cy 
+            camera_para = [ depthcubemap.depthmap[0].shape[0]/2/np.tan(CUBICVIEW_FOV/2),    # fx
+                            depthcubemap.depthmap[0].shape[0]/2/np.tan(CUBICVIEW_FOV/2),    # fy
+                            depthcubemap.depthmap[0].shape[0]/2, depthcubemap.depthmap[0].shape[0]/2]    # cx, cy 
         elif len(camera_para) != 4:
             raise ValueError("Inpute ERROR. Camera parameters should have 4 parameters:[fx, fy, cx, cy].")
         
-        for ind in range(len(path_to_file)):
+        for ind in range(len(path_to_depthfile)):
             if map_type == 'depth_maps':
-                cubemap.depthmap[ind] = cubemap.depth_trans(cubemap.depthmap[ind], camera_para)
+                depthcubemap.depthmap[ind] = depthcubemap.depth_trans(depthcubemap.depthmap[ind], camera_para)
             elif map_type == 'normal_maps':
                 warnings.warn("Project normal maps are not supported by now.")
-    
-    if CUBICVIEW_FOV <= np.pi/2:
-        cubemap.cube2sphere_fast(resolution = output_resolution, fov = CUBICVIEW_FOV)
-    else:
-        # think about cost maps
-        cubemap.depthmap = viewsfusion(cubemap.depthmap, output_resolution)
+
+    depthcubemap._omnimage, costcubemap._omnimage = viewsfusion(depthcubemap.depthmap, costcubemap.depthmap, output_resolution)
     
     if save:
         if map_type == 'depth_maps' or 'cost_maps':
-            cubemap.save_omnimage(path=path, name='360_'  + map_type + '.exr')
+            depthcubemap.save_omnimage(path= path, name='360_'  + 'depth_maps' + '.exr')
+            costcubemap.save_omnimage(path = pathCost, name='360_'  + 'cost_maps' + '.exr')
         else:
-            cubemap.save_omnimage(path=path, name='360_'  + map_type + '.png')
+            depthcubemap.save_omnimage(path=path, name='360_'  + map_type + '.png')
     
-    return cubemap.omnimage
+    return depthcubemap._omnimage, costcubemap._omnimage
     
 
-def viewsfusion( depthList: list, resolution: tuple ):
+def viewsfusion( depthList: list, costList: list, resolution: tuple ):
 
     cam360List = []
     cubeTemp = CubicMaps()
     
+    rotation = np.eye(3)
+    translation = np.array([0, 0, 0])
     for ind, view in enumerate(depthList):
+        omniDepth = np.zeros(resolution)   
+        omniCost  = np.ones(resolution) * 5    # default cost should be a large value 
+        
         depthTemp = [np.zeros(depthList[0].shape)] * 6
         depthTemp[ind] = depthList[ind]
         
-        cubeTemp.depthmap = depthTemp
-        cubeTemp.cube2sphere_fast(resolution = resolution, fov = CUBICVIEW_FOV)
+        costTemp  = [np.ones(costList[0].shape) * 5] * 6
+        costTemp[ind] = costList[ind]
+        
+        omniDepth = cubeTemp.cube2sphere_fast( depthTemp, resolution, fov = CUBICVIEW_FOV )[:,:,0]
+        omniCost  = cubeTemp.cube2sphere_fast( costTemp, resolution, fov = CUBICVIEW_FOV )[:,:,0]
         
         cam360Temp = Cam360(
-                rotation_mtx = np.eye(3), 
-                translation_vec = np.array([0,0,0]), 
+                rotation_mtx = rotation, 
+                translation_vec = translation, 
                 height = resolution[0], 
                 width  = resolution[1], 
-                channels = 1, 
-                texture  = np.zeros(resolution), 
-                depth    = cubeTemp.depth)        
+                channels = 3, 
+                texture  = np.zeros(resolution + (3,)), 
+                depth    = omniDepth,
+                cost     = omniCost)        
         
         cam360List.append(cam360Temp)        
     
     method = 'sort'    
     output_depth = True
-    rotation = np.eye(3)
-    translation = np.array([8,8,1])
-    Syn_view, Syn_depth = synthesize_view(cam360List, rotation, translation, 
+    Syn_view, Syn_depth, Syn_cost = synthesize_view(cam360List, rotation, translation, 
                                           resolution, with_depth = output_depth, 
                                           method = method, parameters = 4)    
-    return Syn_depth    
+    return np.expand_dims(Syn_depth, axis=2), np.expand_dims(Syn_cost, axis=2)
 
 
 def evaluate(estimation: np.array, GT: np.array, checking_line: int = 100, max_: int = 25, error_threshold: int = 2, inf_value: int=50, save: bool = False,):   
