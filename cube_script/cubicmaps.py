@@ -370,7 +370,12 @@ class CubicMaps:
                 mask_phi = (grid_phi - face_num*np.pi/2 < fov/2) * (grid_phi - face_num*np.pi/2 > -fov/2 + (face_num==0)*2*np.pi)
             mask_theta = (grid_theta > np.pi/2 - fov/2) * (grid_theta < np.pi/2 + fov/2)
             mask_face  = mask_theta * mask_phi
-            mask_face  = mask_face.flatten()   
+            
+            # remove unrelated parts by setting theta and phi to 0
+            grid_phi[~mask_face]   = 0
+            grid_theta[~mask_face] = 0
+            mask_fov = np.cos(np.pi/2 - grid_theta)*np.cos(grid_phi - face_num*np.pi/2) >= np.cos(fov/2)    # 3D angle should be smaller than fov/2
+            mask_face = mask_fov.flatten()   
             
             # slicing grids
             phi   = -( grid_phi.flatten()[mask_face] - face_num*np.pi/2 )
@@ -383,10 +388,10 @@ class CubicMaps:
         # the top and bottom surface 
         else:
             # generate mask using element wise bool operation
-            mask_face0 = np.abs(1/np.cos(grid_phi)/(np.tan(grid_theta) + 1e-16)) > halfImageSizeNorm 
-            mask_face1 = np.abs(1/np.cos(grid_phi-np.pi/2)/(np.tan(grid_theta) + 1e-16)) > halfImageSizeNorm
-            mask_face2 = np.abs(1/np.cos(grid_phi-np.pi)/(np.tan(grid_theta) + 1e-16)) > halfImageSizeNorm
-            mask_face3 = np.abs(1/np.cos(grid_phi-3*np.pi/2)/(np.tan(grid_theta) + 1e-16)) > halfImageSizeNorm
+            mask_face0 = np.abs(np.tan(fov/2)/np.cos(grid_phi)/(np.tan(grid_theta) + 1e-16)) > halfImageSizeNorm 
+            mask_face1 = np.abs(np.tan(fov/2)/np.cos(grid_phi-np.pi/2)/(np.tan(grid_theta) + 1e-16)) > halfImageSizeNorm
+            mask_face2 = np.abs(np.tan(fov/2)/np.cos(grid_phi-np.pi)/(np.tan(grid_theta) + 1e-16)) > halfImageSizeNorm
+            mask_face3 = np.abs(np.tan(fov/2)/np.cos(grid_phi-3*np.pi/2)/(np.tan(grid_theta) + 1e-16)) > halfImageSizeNorm
             
             if face_num == 4:
                 mask_center = (grid_theta < fov/2)
