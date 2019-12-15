@@ -6,11 +6,12 @@ Created on Tue May 28 14:36:17 2019
 @author: zhantao
 """
 import cv2
-import warnings
+import os
 import numpy as np
+import open3d as o3d
 
 from cam360 import Cam360
-from spherelib import pol2eu, eu2pol
+from spherelib import eu2pol
 from cubicmaps import CubicMaps
 import matplotlib.pyplot as plt
 
@@ -18,9 +19,146 @@ import matplotlib.pyplot as plt
 MIN_NUM_FEATURE = 20
 MIN_OVERLAPPING = 40
 MIN_TRIANGULATION = 6*np.pi/180
+SAVE_REFERANCE  = 1
+SAVE_SOURCE     = 2
 
 UPDATE_RATE = 0.2
     
+
+class sparseMatches:
+    '''
+    It stores all detected 2D keypoints and the corresponding 3D points. These points
+    are written to Point3D.txt and images.txt and are used to initialize the Patch 
+    Matching Stereo GPU of the Colmap.
+    '''
+       
+    def __init__(self, keypointFromRef: list, keypointFromSrc: list, keypointsMatches: list):
+        
+        self.keyPointRef = []
+        self.keyPointSrc = [] 
+        self.unsavedKeypointsRef = []
+        
+        for match in keypointsMatches:
+            self.keyPointRef.append([keypointFromRef[match.queryIdx].pt[0],
+                                     keypointFromRef[match.queryIdx].pt[1]])
+            self.keyPointSrc.append([keypointFromSrc[match.trainIdx].pt[0], 
+                                     keypointFromSrc[match.trainIdx].pt[1]])  
+        self.keyPointRef = np.array(self.keyPointRef).transpose()
+        self.keyPointSrc = np.array(self.keyPointSrc).transpose()
+        
+        self.indexKeypoints = -1
+        self.index3Dpoints  = -1
+        
+    def setIntrinsics(self, camIntrinsics: np.array):
+        self.intrinsics = camIntrinsics
+        
+    def setExtrinsics(self, camRotationMat: np.array, camTranslateionVec: np.array):
+        self.rotation = camRotationMat
+        self.translation = camTranslateionVec
+    
+    def triangulateMatches(self):
+        projRef = np.eye(3,4)
+        projSrc = np.zeros([3,4])
+        
+        projSrc[0:3, 0:3] = self.rotation
+        projSrc[:, 3] = self.translation
+        
+        projRef = self.intrinsics.dot(projRef)
+        projSrc= self.intrinsics.dot(projSrc)
+        
+        self.point3D = cv2.triangulatePoints(projRef, projSrc, np.float32(self.keyPointRef), np.float32(self.keyPointSrc))
+        self.point3D = self.point3D/self.point3D[3,:]
+        
+        mask = self.point3D[2,:] > 0
+        self.point3D = self.point3D[ :, mask]
+        self.keyPointRef = self.keyPointRef[:, mask]
+        self.keyPointSrc = self.keyPointSrc[:, mask]
+
+         ###### Debug visualization ######
+#        mesh_frame = o3d.geometry.TriangleMesh.create_coordinate_frame(size=0.6, origin=[0, 0, 0])
+#        pcd = o3d.geometry.PointCloud()
+#        pcd.points = o3d.utility.Vector3dVector(self.point3D.transpose()[:, :3])
+#        o3d.visualization.draw_geometries([pcd, mesh_frame])
+    
+    def saveKeypoint( self, pathToFile: str, RefOrSrc: int, imageIdx: int):
+        
+        if RefOrSrc == SAVE_REFERANCE and len(self.keyPointRef) > 0:
+            keypoints = self.keyPointRef
+        elif RefOrSrc == SAVE_SOURCE and len(self.keyPointSrc) > 0:
+            keypoints = self.keyPointSrc
+        else:
+            return None
+            
+        f = open(pathToFile, "r")
+        contents = f.readlines()
+        f.close()
+        
+        checkList = []
+        for line in contents:
+            checkList.append(str(imageIdx) == line.split(' ')[0])
+        index = np.where(checkList)[0][0] + 1
+        newline = contents[index][1:] 
+
+        for idx in range(keypoints.shape[1]):
+            newline += str(keypoints[0, idx]) + ' ' + str(keypoints[1, idx]) + ' ' + str(self.point3DIdx + idx) + ' '
+        contents.insert(index, newline)
+            
+        f = open(pathToFile, "w")
+        contents = "".join(contents)
+        f.write(contents)
+        f.close()
+                        
+    def savePoints3D( self, pathToFile: str, refImgIdx: int, srcImgIdx: int ):
+        if len(self.point3D) > 0:
+            f = open(pathToFile, "r")
+            contents = f.readlines()
+            f.close()
+            
+            for index in range(self.point3D.shape[1]):
+                newPoint = [ str(index + self.point3DIdx) + ' ' + str(self.point3D[0, index]) + ' ' +  
+                             str(self.point3D[1, index]) + ' ' +  str(self.point3D[2, index]) + ' ' + 
+                             str(0) + ' ' + str(0) + ' ' + str(0) + ' ' + str(1) + ' ' + str(refImgIdx) + ' ' +
+                             str(index + self.keyPointRefIdx) + ' ' + str(srcImgIdx) + ' ' + str(index + self.keyPointSrcIdx) + '\n']
+                
+                contents += newPoint
+            
+            f = open(pathToFile, "w")
+            contents = "".join(contents)
+            f.write(contents)
+            f.close()
+            
+                            
+    def savePoints(self, pathToFile: str, refImgIdx: int, srcImgIdx: int):
+       
+        point3DFile = os.path.join(pathToFile, 'points3D.txt')
+        imagesFile  = os.path.join(pathToFile, 'images.txt')
+        
+        f = open(point3DFile, "r")
+        self.point3DIdx = len(f.readlines())
+        f.close()
+        
+        f = open(imagesFile, "r")
+        contents = f.readlines()
+        for idx, line in enumerate(contents):
+            if str(refImgIdx) == line.split(' ')[0]:
+                self.keyPointRefIdx = int((len(contents[idx+1].split(' ')) - 1)/3)
+                break
+        f.close()
+        if line == contents[-1]:    # if the ref view is not saved yet, save its keypoints
+            ValueError("By now, the reference image has to be the first image in the list.")
+                
+        f = open(imagesFile, "r")
+        contents = f.readlines()
+        for idx, line in enumerate(contents):
+            if str(srcImgIdx) == line.split(' ')[0]:
+                self.keyPointSrcIdx = int((len(contents[idx+1].split(' ')) - 1)/3)
+                break
+        f.close()
+        
+        self.savePoints3D(point3DFile, refImgIdx, srcImgIdx)
+        self.saveKeypoint(imagesFile, SAVE_REFERANCE, refImgIdx)
+        self.saveKeypoint(imagesFile, SAVE_SOURCE, srcImgIdx)
+        
 
 def view_selection(cam:Cam360, reference:np.array, initial_pose: tuple, reference_trans: np.array, fov: tuple=(np.pi/2, np.pi/2),
                    max_iter: int=10, use_filter: bool=True, threshold: float=10.0):
@@ -100,6 +238,7 @@ def view_selection(cam:Cam360, reference:np.array, initial_pose: tuple, referenc
         source   = cubemaps.cube_projection(cam=cam, direction=(pose + fov), resolution=reference.shape)
         score    = 2
         pose     = initial_pose
+        Matches = sparseMatches([],[],[])
     
     else:
     
@@ -184,7 +323,7 @@ def view_selection(cam:Cam360, reference:np.array, initial_pose: tuple, referenc
                 continue
             
             ####################            
-    #        DEMO AND DEBUG
+#            DEMO AND DEBUG
 #            show_matches = cv2.drawMatches(reference, kp1, source_gray, kp2, matches, None, flags=2)
 #            plt.figure(figsize=(18,14))
 #            plt.imshow(show_matches)
@@ -208,11 +347,26 @@ def view_selection(cam:Cam360, reference:np.array, initial_pose: tuple, referenc
             score = score_overlapping + score_triangulation
             
             pose = (pose[1], pose[0])    # convert to (theta, phi)
+            
+            # save matches
+            Matches = sparseMatches(kp1, kp2, matches)
+            
+            ####################            
+#            DEMO AND DEBUG
+#            show_matches = cv2.drawMatches(reference, kp1, source_gray, kp2, matches, None, flags=2)
+#            plt.figure(figsize=(18,14))
+#            plt.imshow(show_matches)
+#            plt.axis('off')
+#            plt.savefig("matches_iter{:d}.png".format(cnt), bbox_inches='tight')
+#            plt.close()
+             ###################
+            
         else:
             # Fail to find valid views
             source, pose, score = None, None, None
+            Matches = sparseMatches([],[],[])
     
-    return source, pose, score
+    return source, pose, score, Matches
 
 
 def correct_angles( angles: tuple ):
