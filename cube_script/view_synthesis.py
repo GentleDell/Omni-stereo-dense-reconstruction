@@ -74,6 +74,7 @@ def synthesize_view(cam360_list: list, rotation: np.array, translation: np.array
         
         gpu_index: int
             the index of gpu to accelerate the function
+            
     '''
     
     print("projecting pixels from original views to the synthesized view ...")
@@ -128,6 +129,7 @@ def pixel_filter(pixels: np.array, resolution: tuple, method: str, parameter: fl
         
         gpu_ind: int
             gpu index
+            
     '''
     # verify the required method
     try:
@@ -186,6 +188,7 @@ def verify_and_synthesize_cpu( new_indices: np.array, original_indices: np.array
             
         gpu_ind: None
             not used
+            
     '''
     
     # Verify the filtered indices are reasonable.
@@ -286,6 +289,7 @@ def verify_and_synthesize_gpu( new_indices: np.array, original_indices: np.array
             
         gpu_ind: int
             gpu index
+            
     '''
     
     # Verify the filtered indices are reasonable.
@@ -388,6 +392,7 @@ def get_texture(texture_index: np.array, cam360_list: list, resolution: tuple, w
             
         with_depth: bool
             whether to output depth map for the target view
+            
     '''
     # initialize the synthesis view
     syn_view = np.zeros(resolution + (3,))
@@ -441,6 +446,7 @@ def project_to_view(cam360_list: list, rotation: np.array, translation: np.array
         
         resolution: tuple
             resolution of the target view
+            
     '''
     # initialize an array to store projections
     projections = np.empty((0, 6))
@@ -540,6 +546,7 @@ def aggregate_pixels(projections: np.array, resolution: tuple, fast: bool = Fals
             
         resolution: tuple
             Resolution of the synthesized view.
+            
     '''
     # sort by the index of row and column, depth and then cost
     sort_ind = np.lexsort( (projections[:,3], projections[:,2], projections[:,1], projections[:,0]) )
@@ -598,6 +605,7 @@ def compute_cost(depth_cost_array: np.array, resolution: tuple):
             
         resolution: tuple
             the resolution of the final image.
+            
     '''    
     # get the indices where coordinates change
     diff_ind = compute_diff(depth_cost_array[:,:2])
@@ -640,6 +648,7 @@ def compute_cost_fast(depth_cost_array: np.array, resolution: tuple):
             
         resolution: tuple
             output resolution
+            
     '''    
     pixel_array = np.nan * np.ones(resolution + (_NUM_CANDIDATES_,))
     view_array  = np.nan * np.ones(resolution + (_NUM_CANDIDATES_,))
@@ -712,6 +721,7 @@ def project(theta: np.array, phi: np.array, depth: np.array,
     Returns:
         theta_proj: the corresponding elevation (N,) on the sphere B.
         phi_proj: the corresponding azimuth (N,) on the sphere B.
+        
     """
 
     # Compute the 3D coordinate of theta and phi on the sphere A.
@@ -770,6 +780,7 @@ def evaluation( texture: np.array, texture_GT: np.array, depth:np.array, depth_G
     
     print("{:f}% pixels are filled".format(np.sum(mask)/diff_map.size*100))
 
+
 def printProgressBar (iteration, total, prefix = '', suffix = '', decimals = 1, length = 100, fill = '█'):
     """
     Call in a loop to create terminal progress bar  
@@ -784,6 +795,7 @@ def printProgressBar (iteration, total, prefix = '', suffix = '', decimals = 1, 
         decimals    - Optional  : positive number of decimals in percent complete (Int)
         length      - Optional  : character length of bar (Int)
         fill        - Optional  : bar fill character (Str)
+        
     """
     percent = ("{0:." + str(decimals) + "f}").format(100 * (iteration / float(total)))
     filledLength = int(length * iteration // total)

@@ -17,10 +17,6 @@ from read_dense import read_array
  
 from interpolation.splines import CubicSplines
 
-# The maximum and minimum value of depth 
-_MAXIMUM_DEPTH = 50
-_MINIMUM_DEPTH = 0.001
-
 class CubicMaps:
     """
     It implements sphere2cubemap projection and cubemap2sphere projection.
@@ -39,7 +35,7 @@ class CubicMaps:
     In particular, for each pixel on the depthmap, it's depth means the distance between the 3D point 
     to the camera plane. Depthmaps always have only 1 channel.
     """
-    def __init__(self, dist: float = 1):
+    def __init__(self, dist: float = 1, maxDepth: float = 100, minDepth: float = 1e-3):
         """
             It initializes the object.
                 
@@ -52,6 +48,10 @@ class CubicMaps:
         
         # this is used in cubic projection, denoting the distance bewteen sphere center to the projection plane 
         self._dist = dist
+        
+        # thresholds to remove ourliers on depth maps
+        self._maximum_depth = maxDepth
+        self._minimum_depth = minDepth
         
         # list to save cube maps
         self._cubemap = []
@@ -213,11 +213,11 @@ class CubicMaps:
             cam_center_row = camera_parameters[2]
             cam_center_col = camera_parameters[3]
             
-            row_dist = np.arange(depthmap.shape[0]) - cam_center_row + 1
+            row_dist = np.arange(start = 0.5, stop = depthmap.shape[0]) - cam_center_row
             row_dist_mat = np.tile( np.transpose([row_dist]), (1, depthmap.shape[1]))
             
-            col_dst = np.arange(depthmap.shape[1]) - cam_center_col + 1
-            col_dist_mat = np.tile( col_dst, (depthmap.shape[0], 1))
+            col_dist = np.arange(start = 0.5, stop = depthmap.shape[0]) - cam_center_col
+            col_dist_mat = np.tile( col_dist, (depthmap.shape[0], 1))
             
             radius_depth = depthmap * np.sqrt(1 + (row_dist_mat/fy)**2 + (col_dist_mat/fx)**2)
             
@@ -328,7 +328,7 @@ class CubicMaps:
                 
                 tempTexture = cube_list[face][row, col]
                 tempImage = Omni_image[ mask_face, :]
-                mask = np.logical_or(tempImage <= _MINIMUM_DEPTH, tempImage >= _MAXIMUM_DEPTH)      # only update invalid depth
+                mask = np.logical_or(tempImage <= self._minimum_depth, tempImage >= self._maximum_depth)      # only update invalid depth
                 tempImage[mask] = tempTexture[mask]
                 Omni_image[ mask_face, : ] = tempImage
                 
@@ -356,8 +356,8 @@ class CubicMaps:
                 A mask vector for the image block on omnidirectional image corresponding to the face_num.
         """
         # generate sphere grids
-        phi   = np.linspace(0, 2*np.pi, num = resolution[1])
-        theta = np.linspace(0, np.pi  , num = resolution[0])
+        phi   = np.linspace(0 + 2*np.pi/resolution[1]/2, 2*np.pi - 2*np.pi/resolution[1]/2, num = resolution[1])
+        theta = np.linspace(0 + np.pi/resolution[0]/2  , np.pi - np.pi/resolution[0]/2    , num = resolution[0])
         grid_phi, grid_theta = np.meshgrid(phi, theta)
         halfImageSizeNorm = np.tan(fov/2)
         
@@ -701,7 +701,21 @@ class CubicMaps:
     # save cubic maps (texture or depthmap)
         if (not is_depth):
             self._cubemap = cubic_maps
+            
         if is_depth:
+            
+            uvIndices  = np.array( np.meshgrid( np.arange(0.5, resolution[1]),
+                                   np.arange(0.5, resolution[0]) )).swapaxes(0, 1).swapaxes(1,2)
+            uvIndices[:,:,0] = uvIndices[:,:,0] - resolution[1]/2
+            uvIndices[:,:,1] = uvIndices[:,:,1] - resolution[0]/2
+            f = np.array(resolution)/2/np.tan(fov/2)
+            
+            item1 = (uvIndices[:,:,0]**2/f[1]**2)
+            item2 = (uvIndices[:,:,1]**2/f[0]**2)
+            
+            for ind in range(len(cubic_maps)):  
+                cubic_maps[ind] = np.sqrt(cubic_maps[ind]**2/(item1 + item2 + 1))
+                
             self._depthmap = cubic_maps
         
         return cubic_maps
@@ -917,9 +931,55 @@ class CubicMaps:
             fy.append(np.mean( -(grid_Z*pix_y/grid_Y) ))
         return fx, fy
         
+    
+    def load_cubemaps(self, path_to_file: list):
+        """
+        It load cubemaps in the given path.
+
+        Parameters
+        ----------
+        path_to_file : list
+            path to the map to be loaded.
+    
+        Returns
+        -------
+        None.
+
+        """
+        if len(self._cubemap) != 0:
+            warnings.warn("textures will be replaced!")
+            print('Input will be arranged according to their names')
+            self._cubemap = []
+            
+        for file in sorted(path_to_file):
+            view_ind = int(file.split('/')[-1].split('.')[0].split('_')[-1][-1])
+            
+            texture = np.flip(cv2.imread(file), axis = 2)
+            
+            while view_ind > len(self._cubemap):
+                self._cubemap.append( np.zeros( texture.shape ) )
+            self._cubemap.append(texture)
         
-###### adapted from colmap ######
+        while 6 > len(self._cubemap):    # 6 is the number of all cubic maps
+            self._cubemap.append( np.zeros( texture.shape ) )
+    
+    
     def load_depthmap(self, path_to_file: list, type_: str):
+        """
+        It can load not only binary depth maps but cost and normal maps (for colmap).
+
+        Parameters
+        ----------
+        path_to_file : list
+            path to the map to be loaded.
+        type_ : str
+            the type of the map to be loaded.
+
+        Returns
+        -------
+        None.
+
+        """
         if len(self._depthmap) != 0:
             warnings.warn("Depth maps will be replaced!")
             print('Input will be arranged according to their names')
@@ -930,28 +990,33 @@ class CubicMaps:
             raw_depthmap = read_array(file)
             
             if type_ == 'depth_maps':
-                depth_map = self.filt_depthoutliers(raw_depthmap)     # (n by n)
+                depth_map = self.filter_depthoutliers(raw_depthmap)     # (n by n)
+                
             elif type_ == 'cost_maps':
                 if len(raw_depthmap.shape) < 3:  # only one src views
                     depth_map = raw_depthmap
                 else:
                     depth_map = np.median(raw_depthmap, axis = 2)     # (n by n)
+                    
+            elif type_ == 'normal_maps':
+                depth_map = raw_depthmap
+                
                 
             while view_ind > len(self._depthmap):
-                self._depthmap.append(np.zeros( depth_map.shape + (1,) ))
-            self._depthmap.append(np.expand_dims(depth_map, axis = 2))
+                self._depthmap.append(np.zeros( depth_map.shape[:2] + (1,) ))
+                
+            if type_ != 'normal_maps':
+                self._depthmap.append(np.expand_dims(depth_map, axis = 2))
+            else:
+                self._depthmap.append(depth_map)
         
         while 6 > len(self._depthmap):    # 6 is the number of all cubic maps
             self._depthmap.append(np.zeros(self._depthmap[0].shape))
             
             
-    def filt_depthoutliers(self, depth_map: np.array) -> np.array:
-#        min_depth, max_depth = np.percentile(depth_map, [5, 95])
-#        depth_map[depth_map < min_depth] = min_depth
-#        depth_map[depth_map > max_depth] = max_depth
-        
-        depth_map[depth_map<_MINIMUM_DEPTH] = -1
-        depth_map[depth_map>_MAXIMUM_DEPTH] = -1
+    def filter_depthoutliers(self, depth_map: np.array) -> np.array:
+   
+        depth_map[depth_map<=self._minimum_depth] = -1
+        depth_map[depth_map>=self._maximum_depth] = -1
         
         return depth_map
-###### end of adapted codes ###### 
