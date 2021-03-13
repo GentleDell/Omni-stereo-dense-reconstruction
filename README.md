@@ -1,7 +1,7 @@
 # Multi-view 360 Stereo
 
 ## About
-This project is a python implemetation of multiview 360 stereo. Details can be found in [this report](https://github.com/GentleDell/Omni-stereo-dense-reconstruction/blob/master/Multiview%20360%20Stereo.pdf).
+This project is about multiview 360 stereo. Details can be found in [this report](https://github.com/GentleDell/Omni-stereo-dense-reconstruction/blob/master/Multiview%20360%20Stereo.pdf).
 
 To deal with distortions of 360 images and to estimate depth maps, cubic projection is implemented. It decomposes every 360 images into 6 views which can be treated as regular images. Then [PatchMatching Stereo](https://www.microsoft.com/en-us/research/publication/patchmatch-stereo-stereo-matching-with-slanted-support-windows/) implemented in the [COLMAP](https://colmap.github.io/) is used to estimate depth. To improve the performance of depth estimation and leverage the rich textures captured by 360 cameras,a view selection method based on similarity and triangulation angle is implemented. Finally, to generate new views at arbitrary poses, a view synthesis algorithm is accomplished, where indices volumes and costs volumes are defined for pixel-wise selection and texture synthesis.
 
